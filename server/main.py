@@ -215,6 +215,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         payload = decision.to_dict()
         payload["headline"] = story.headline
         payload["market_question"] = market.question
+        payload["prev_price"] = market.current_probability
         asyncio.create_task(ws_server.broadcast_decision(payload))
 
     # ── Groq dispatch (tag-filter → parallel evals) ───────────────
@@ -249,6 +250,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
             mkt = market_by_addr.get(payload["market_address"])
             if mkt:
                 payload["market_question"] = mkt.question
+                payload["prev_price"] = mkt.current_probability
             action = payload["action"]
             theo = payload.get("theo")
             if action != "SKIP":

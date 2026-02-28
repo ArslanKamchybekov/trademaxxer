@@ -17,13 +17,18 @@ function ConfidenceBar({ value, action }) {
   )
 }
 
-function Theo({ value, action }) {
-  if (value == null) return null
-  const pct = Math.round(value * 100)
+function PriceMove({ prev, theo, action }) {
+  if (theo == null) return null
+  const theoPct = Math.round(theo * 100)
   const color = action === "YES" ? "text-yes" : action === "NO" ? "text-no" : "text-muted-foreground"
+  if (prev == null) {
+    return <span className={`tabular text-[9px] font-mono ${color}`}>→{theoPct}¢</span>
+  }
+  const prevPct = Math.round(prev * 100)
   return (
-    <span className={`tabular text-[9px] font-mono ${color}`}>
-      →{pct}¢
+    <span className="tabular text-[9px] font-mono">
+      <span className="text-muted-foreground">{prevPct}¢</span>
+      <span className={color}>→{theoPct}¢</span>
     </span>
   )
 }
@@ -46,7 +51,7 @@ function DecisionRow({ data, idx }) {
           {style.label}
         </span>
         <ConfidenceBar value={data.confidence || 0} action={data.action} />
-        <Theo value={data.theo} action={data.action} />
+        <PriceMove prev={data.prev_price} theo={data.theo} action={data.action} />
         <span className="tabular shrink-0 text-amber">{latency}</span>
         <span className="shrink-0 text-[8px] text-muted-foreground/40">{version}</span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground text-[9px]">
