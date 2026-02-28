@@ -130,7 +130,39 @@ _HEADLINES: list[tuple[str, tuple[str, ...], bool]] = [
     ("Gold surges past $2,900/oz setting new all-time high on safe-haven demand", ("financials",), True),
 ]
 
-_SOURCES = ["Reuters", "Bloomberg", "AP", "Axios", "WSJ", "FT"]
+_SOURCES = {
+    "Reuters": {
+        "desc": "Reuters News Agency — Global wire service",
+        "url": "https://www.reuters.com",
+        "avatar": "https://logo.clearbit.com/reuters.com",
+    },
+    "Bloomberg": {
+        "desc": "Bloomberg Terminal — Financial news & data",
+        "url": "https://www.bloomberg.com",
+        "avatar": "https://logo.clearbit.com/bloomberg.com",
+    },
+    "AP": {
+        "desc": "Associated Press — Independent news agency",
+        "url": "https://apnews.com",
+        "avatar": "https://logo.clearbit.com/apnews.com",
+    },
+    "Axios": {
+        "desc": "Axios — Smart brevity news",
+        "url": "https://www.axios.com",
+        "avatar": "https://logo.clearbit.com/axios.com",
+    },
+    "WSJ": {
+        "desc": "The Wall Street Journal — Business & markets",
+        "url": "https://www.wsj.com",
+        "avatar": "https://logo.clearbit.com/wsj.com",
+    },
+    "FT": {
+        "desc": "Financial Times — Global business news",
+        "url": "https://www.ft.com",
+        "avatar": "https://logo.clearbit.com/ft.com",
+    },
+}
+_SOURCE_NAMES = list(_SOURCES.keys())
 
 
 def _make_news_item(
@@ -138,16 +170,18 @@ def _make_news_item(
     categories: tuple[str, ...],
     is_priority: bool,
 ) -> RawNewsItem:
+    source = random.choice(_SOURCE_NAMES)
+    info = _SOURCES[source]
     return RawNewsItem(
         id=uuid.uuid4().hex[:12],
         timestamp=datetime.now(timezone.utc),
         headline=headline,
         body="",
         source_type=random.choice([SourceType.NEWS_WIRE, SourceType.TWITTER, SourceType.RSS]),
-        source_handle=random.choice(_SOURCES),
-        source_description="",
-        source_url="",
-        source_avatar="",
+        source_handle=source,
+        source_description=info["desc"],
+        source_url=info["url"],
+        source_avatar=info["avatar"],
         media_url="",
         pre_tagged_tickers=(),
         ticker_reasons=(),

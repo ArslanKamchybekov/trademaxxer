@@ -82,6 +82,17 @@ body {
 .flash-decision-no { animation: flash-no 1.2s ease-out; }
 .blink { animation: blink 1s step-end infinite; }
 
+/* ── Agent panel pulse ────────────────────────────── */
+
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+.animate-ping { animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite; }
+
 /* ── Ticker tape animation ─────────────────────────── */
 
 @keyframes ticker-scroll {
