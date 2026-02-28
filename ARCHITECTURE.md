@@ -372,34 +372,21 @@ classDiagram
 ## 10. Architecture Evolution Timeline
 
 ```mermaid
-timeline
-    title TradeMaxxer Latency Optimization Journey
-    section Session 1 : Groq LLM
-        v1 llama-70b  : 658ms cold, 350ms warm
-                       : Verbose output, parsing failures
-        v3 llama-8b   : 300ms warm
-                       : 20% faster, rate limited at scale
-    section Session 2 : Redis + Mock
-        Pub/Sub wired : Full pipeline end-to-end
-                      : Mock mode for offline dev
-        Warm-up added : Eliminates cold start penalty
-    section Session 3 : Dashboard
-        Bloomberg UI  : 13 live panels
-                      : CRT aesthetic, real-time charts
-    section Session 4 : NLI Migration
-        DeBERTa + PyTorch : ~200ms warm
-                          : No rate limits, no API keys
-        ONNX Runtime       : ~143ms warm (local Mac)
-                           : 300MB image (was 1.5GB)
-    section Session 6-7 : Optimization
-        Direct dispatch : Redis removed from hot path
-        Chunked batching : Scales to 5k+ markets
-        Fire-and-forget  : Non-blocking WS broadcasts
-        Market toggles   : User-controlled monitoring
-    section Session 8 : Local ONNX
-        --local flag  : 16–69ms end-to-end
-                      : Zero network, zero cost
-                      : Apple Silicon inference
+graph LR
+    V1["v1 Llama-70B<br/>658ms"] --> V3["v3 Llama-8B<br/>300ms"]
+    V3 --> REDIS["Redis + Mock<br/>Full pipeline"]
+    REDIS --> DASH["Bloomberg UI<br/>13 panels"]
+    DASH --> PT["DeBERTa PyTorch<br/>200ms"]
+    PT --> OX["ONNX on Modal<br/>143ms"]
+    OX --> DD["Direct dispatch<br/>Batching + toggles"]
+    DD --> LO["Local ONNX<br/>16-69ms"]
+
+    style V1 fill:#1a0000,stroke:#ff4444,color:#fff
+    style V3 fill:#1a0000,stroke:#ff4444,color:#fff
+    style PT fill:#0a0a1a,stroke:#4488ff,color:#fff
+    style OX fill:#0a0a1a,stroke:#4488ff,color:#fff
+    style DD fill:#001a00,stroke:#00cc44,color:#fff
+    style LO fill:#00aa44,color:#fff
 ```
 
 ---
