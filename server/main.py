@@ -92,6 +92,35 @@ async def run() -> None:
             agent_tested = True
             asyncio.create_task(_test_agent(tagged))
 
+    async def _warmup_modal(market: MarketConfig) -> None:
+        """Fire a dummy evaluation to force Modal container boot before real news."""
+        import time
+        from datetime import datetime, timezone
+
+        dummy = StoryPayload(
+            id="warmup-ping",
+            headline="warmup ping — ignore",
+            body="",
+            tags=("warmup",),
+            source="trademaxxer",
+            timestamp=datetime.now(timezone.utc),
+        )
+
+        logger.info("Warming up Modal container...")
+        try:
+            import modal
+
+            AgentCls = modal.Cls.from_name("trademaxxer-agents", "MarketAgent")
+            agent = AgentCls()
+
+            t0 = time.monotonic()
+            await agent.evaluate.remote.aio(dummy.to_dict(), market.to_dict())
+            warmup_ms = (time.monotonic() - t0) * 1000
+
+            logger.info(f"Modal warm-up complete — {warmup_ms:.0f}ms (container is hot)")
+        except Exception as e:
+            logger.warning(f"Modal warm-up failed (non-fatal): {e}")
+
     async def _test_agent(tagged):
         """One-shot test: send the first tagged event to Modal MarketAgent."""
         import time
@@ -153,6 +182,9 @@ async def run() -> None:
         f"WebSocket server listening on "
         f"ws://{settings.websocket_server.host}:{settings.websocket_server.port}"
     )
+
+    # ── Warm up Modal container before news feed connects ──────────
+    await _warmup_modal(test_market)
 
     await dbnews_client.connect()
     logger.info("Connected to DBNews feed")
