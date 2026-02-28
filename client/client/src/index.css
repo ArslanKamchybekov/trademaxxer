@@ -1,59 +1,83 @@
 @import "tailwindcss";
 
-@custom-variant dark (&:is(.dark *));
-
 @theme {
-  --color-background: oklch(0.12 0.01 260);
-  --color-foreground: oklch(0.95 0.01 260);
-  --color-card: oklch(0.15 0.01 260);
-  --color-card-foreground: oklch(0.95 0.01 260);
-  --color-popover: oklch(0.15 0.01 260);
-  --color-popover-foreground: oklch(0.95 0.01 260);
-  --color-primary: oklch(0.65 0.18 260);
-  --color-primary-foreground: oklch(0.98 0.01 260);
-  --color-secondary: oklch(0.22 0.01 260);
-  --color-secondary-foreground: oklch(0.95 0.01 260);
-  --color-muted: oklch(0.20 0.01 260);
-  --color-muted-foreground: oklch(0.60 0.01 260);
-  --color-accent: oklch(0.22 0.01 260);
-  --color-accent-foreground: oklch(0.95 0.01 260);
-  --color-destructive: oklch(0.55 0.20 25);
-  --color-destructive-foreground: oklch(0.98 0.01 260);
-  --color-border: oklch(0.25 0.01 260);
-  --color-input: oklch(0.25 0.01 260);
-  --color-ring: oklch(0.65 0.18 260);
+  --color-background: #0a0a0a;
+  --color-foreground: #d4d4d4;
+  --color-card: #111111;
+  --color-card-foreground: #d4d4d4;
+  --color-border: #1e1e1e;
+  --color-muted: #161616;
+  --color-muted-foreground: #666666;
+  --color-primary: #ff9800;
+  --color-primary-foreground: #0a0a0a;
+  --color-accent: #1a1a1a;
+  --color-accent-foreground: #d4d4d4;
 
-  --color-bullish: oklch(0.70 0.17 155);
-  --color-bearish: oklch(0.60 0.20 25);
-  --color-neutral: oklch(0.55 0.02 260);
+  --color-yes: #00c853;
+  --color-no: #ff1744;
+  --color-skip: #555555;
+  --color-bullish: #00c853;
+  --color-bearish: #ff1744;
+  --color-neutral: #555555;
+  --color-amber: #ff9800;
+  --color-amber-dim: #b36b00;
 
-  --radius: 0.625rem;
+  --radius: 0px;
 
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
-
-  --animate-slide-in: slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  --font-sans: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
 }
 
 * {
   border-color: var(--color-border);
+  box-sizing: border-box;
 }
 
 body {
   background-color: var(--color-background);
   color: var(--color-foreground);
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  margin: 0;
 }
 
-@keyframes slide-in {
-  from {
-    opacity: 0;
-    transform: translateX(-12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+::-webkit-scrollbar {
+  width: 4px;
 }
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+}
+
+@keyframes flash-in {
+  0% { background-color: rgba(255, 152, 0, 0.15); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-yes {
+  0% { background-color: rgba(0, 200, 83, 0.2); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flash-no {
+  0% { background-color: rgba(255, 23, 68, 0.2); }
+  100% { background-color: transparent; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.flash-news { animation: flash-in 1.5s ease-out; }
+.flash-decision-yes { animation: flash-yes 1.5s ease-out; }
+.flash-decision-no { animation: flash-no 1.5s ease-out; }
+.blink { animation: blink 1s step-end infinite; }
+
+.tabular { font-variant-numeric: tabular-nums; }

@@ -1,161 +1,79 @@
-import { useState, useEffect, useRef } from "react"
-import {
-  Radio,
-  Cpu,
-  Crosshair,
-  BarChart3,
-  Wallet,
-  CircleDot,
-} from "lucide-react"
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
-import NewsFeed from "@/components/NewsFeed"
-import StatsBar from "@/components/StatsBar"
-import PlaceholderPanel from "@/components/PlaceholderPanel"
+import useWebSocket from "@/hooks/useWebSocket"
+import TerminalHeader from "@/components/TerminalHeader"
+import NewsTape from "@/components/NewsTape"
+import DecisionFeed from "@/components/DecisionFeed"
+import MarketGrid from "@/components/MarketGrid"
+import LatencyChart from "@/components/LatencyChart"
+import DecisionChart from "@/components/DecisionChart"
+import SystemBar from "@/components/SystemBar"
 
-const WS_URL = "ws://localhost:8765"
-
-function ConnectionDot({ status }) {
-  const color = {
-    Connected: "bg-bullish",
-    Connecting: "bg-yellow-400",
-    Disconnected: "bg-bearish",
-    Error: "bg-bearish",
-  }[status] || "bg-muted-foreground"
-
-  return (
-    <span className="relative flex h-2 w-2">
-      {status === "Connected" && (
-        <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-50 ${color}`} />
-      )}
-      <span className={`relative inline-flex h-2 w-2 rounded-full ${color}`} />
-    </span>
-  )
-}
+const MARKETS = [
+  {
+    address: "FakeContract1111111111111111111111111111111",
+    question: "Will the US engage in direct military conflict with Iran before April 2026?",
+    current_probability: 0.38,
+    tags: ["geopolitics", "politics"],
+  },
+  {
+    address: "FakeContract2222222222222222222222222222222",
+    question: "Will oil prices exceed $120/barrel before June 2026?",
+    current_probability: 0.55,
+    tags: ["geopolitics", "commodities", "macro"],
+  },
+  {
+    address: "FakeContract3333333333333333333333333333333",
+    question: "Will the Federal Reserve cut interest rates before July 2026?",
+    current_probability: 0.42,
+    tags: ["macro", "economic_data"],
+  },
+  {
+    address: "FakeContract4444444444444444444444444444444",
+    question: "Will Bitcoin exceed $150k before September 2026?",
+    current_probability: 0.31,
+    tags: ["crypto"],
+  },
+]
 
 export default function App() {
-  const [news, setNews] = useState([])
-  const [connectionStatus, setConnectionStatus] = useState("Connecting")
-  const [stats, setStats] = useState({ total: 0, bullish: 0, bearish: 0, neutral: 0 })
-  const ws = useRef(null)
-  const seqRef = useRef(0)
-
-  useEffect(() => {
-    const connect = () => {
-      ws.current = new WebSocket(WS_URL)
-
-      ws.current.onopen = () => setConnectionStatus("Connected")
-
-      ws.current.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data)
-          if (message.type === "news") {
-            const item = message.data
-            item._seq = ++seqRef.current
-
-            setNews((prev) => [item, ...prev.slice(0, 99)])
-            setStats((prev) => ({
-              total: prev.total + 1,
-              bullish: prev.bullish + (item.sentiment === "bullish" ? 1 : 0),
-              bearish: prev.bearish + (item.sentiment === "bearish" ? 1 : 0),
-              neutral: prev.neutral + (item.sentiment === "neutral" ? 1 : 0),
-            }))
-          }
-        } catch (e) {
-          console.error("Parse error:", e)
-        }
-      }
-
-      ws.current.onclose = () => {
-        setConnectionStatus("Disconnected")
-        setTimeout(connect, 3000)
-      }
-
-      ws.current.onerror = () => setConnectionStatus("Error")
-    }
-
-    connect()
-    return () => ws.current?.close()
-  }, [])
+  const { status, news, decisions, latencyData, stats, marketStats } = useWebSocket()
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
-      {/* ── Top Bar ─────────────────────────────────────────── */}
-      <header className="flex shrink-0 items-center justify-between border-b border-border bg-card/50 px-5 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <CircleDot size={18} className="text-primary" />
-            <span className="text-sm font-semibold tracking-tight">
-              trademaxxer
-            </span>
-          </div>
-          <Separator orientation="vertical" className="!h-4" />
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <ConnectionDot status={connectionStatus} />
-            {connectionStatus}
-          </div>
-        </div>
+    <div className="flex h-screen flex-col bg-background">
+      <TerminalHeader status={status} stats={stats} />
 
-        <StatsBar data={stats} />
-      </header>
-
-      {/* ── Main Grid ───────────────────────────────────────── */}
+      {/* Main grid: 2 cols x 2 rows */}
       <div className="flex flex-1 overflow-hidden">
-        {/* ── News Feed (left, wide) ──────────────────────── */}
-        <div className="flex w-[480px] shrink-0 flex-col border-r border-border">
-          <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-            <Radio size={13} className="text-primary" />
-            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Live Feed
-            </span>
-            <span className="ml-auto text-[11px] font-mono text-muted-foreground/60 tabular-nums">
-              {news.length} events
-            </span>
+        {/* Left column */}
+        <div className="flex w-[420px] shrink-0 flex-col border-r border-border">
+          {/* News wire — top 60% */}
+          <div className="flex-[3] overflow-hidden border-b border-border">
+            <NewsTape news={news} />
           </div>
-          <div className="flex-1 overflow-hidden">
-            <NewsFeed news={news} />
+          {/* Markets — bottom 40% */}
+          <div className="flex-[2] overflow-hidden">
+            <MarketGrid markets={MARKETS} marketStats={marketStats} />
           </div>
         </div>
 
-        {/* ── Right panels ────────────────────────────────── */}
+        {/* Right column */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Top row: Agents + Executor */}
-          <div className="grid flex-1 grid-cols-2 gap-px bg-border">
-            <div className="bg-background p-3">
-              <PlaceholderPanel
-                title="Agents"
-                icon={Cpu}
-                description="Per-market Groq agents will appear here"
-              />
-            </div>
-            <div className="bg-background p-3">
-              <PlaceholderPanel
-                title="Executor"
-                icon={Crosshair}
-                description="Trade execution status will appear here"
-              />
-            </div>
+          {/* Decisions — top 55% */}
+          <div className="flex-[3] overflow-hidden border-b border-border">
+            <DecisionFeed decisions={decisions} />
           </div>
-
-          {/* Bottom row: Positions + PnL */}
-          <div className="grid flex-1 grid-cols-2 gap-px bg-border">
-            <div className="bg-background p-3">
-              <PlaceholderPanel
-                title="Positions"
-                icon={Wallet}
-                description="Open positions & monitoring will appear here"
-              />
+          {/* Charts — bottom 45% */}
+          <div className="flex flex-[2] overflow-hidden">
+            <div className="flex-1 border-r border-border">
+              <LatencyChart data={latencyData} />
             </div>
-            <div className="bg-background p-3">
-              <PlaceholderPanel
-                title="Performance"
-                icon={BarChart3}
-                description="PnL tracking & metrics will appear here"
-              />
+            <div className="flex-1">
+              <DecisionChart stats={stats} />
             </div>
           </div>
         </div>
       </div>
+
+      <SystemBar stats={stats} status={status} />
     </div>
   )
 }

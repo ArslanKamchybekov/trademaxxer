@@ -57,10 +57,12 @@ class AgentListener:
         evaluate_fn: Callable[
             [StoryPayload, MarketConfig], Awaitable[Decision]
         ] | None = None,
+        on_decision: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._market = market
         self._redis_url = redis_url
         self._evaluate_fn = evaluate_fn or _modal_evaluate
+        self._on_decision = on_decision
         self._stats = ListenerStats()
 
     @property
@@ -126,9 +128,7 @@ class AgentListener:
 
         if decision.action == "SKIP":
             self._stats.decisions_skip += 1
-            return
-
-        if decision.action == "YES":
+        elif decision.action == "YES":
             self._stats.decisions_yes += 1
         else:
             self._stats.decisions_no += 1
@@ -138,6 +138,15 @@ class AgentListener:
             f"conf={decision.confidence:.2f} ({decision.latency_ms:.0f}ms) "
             f"| {story.headline[:60]}"
         )
+
+        if self._on_decision:
+            payload = decision.to_dict()
+            payload["headline"] = story.headline
+            payload["market_question"] = self._market.question
+            try:
+                await self._on_decision(payload)
+            except Exception as e:
+                logger.warning(f"on_decision callback failed: {e}")
 
 
 async def _modal_evaluate(story: StoryPayload, market: MarketConfig) -> Decision:
@@ -160,6 +169,7 @@ async def run_all_listeners(
     evaluate_fn: Callable[
         [StoryPayload, MarketConfig], Awaitable[Decision]
     ] | None = None,
+    on_decision: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> list[asyncio.Task]:
     """
     Spawn one AgentListener per market as concurrent tasks.
@@ -167,7 +177,7 @@ async def run_all_listeners(
     Returns the list of asyncio Tasks so the caller can cancel them on shutdown.
     """
     listeners = [
-        AgentListener(market, redis_url, evaluate_fn)
+        AgentListener(market, redis_url, evaluate_fn, on_decision)
         for market in markets
     ]
 

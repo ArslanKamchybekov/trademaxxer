@@ -185,9 +185,13 @@ async def run(*, use_mock: bool = False) -> None:
     if redis_live:
         from agents.listener import run_all_listeners
 
+        async def _broadcast_decision(data):
+            await ws_server.broadcast_decision(data)
+
         listener_tasks = await run_all_listeners(
             markets=test_markets,
             redis_url=REDIS_URL,
+            on_decision=_broadcast_decision,
         )
         logger.info(f"{len(listener_tasks)} agent listener(s) running")
 

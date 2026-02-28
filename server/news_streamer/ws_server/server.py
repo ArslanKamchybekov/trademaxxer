@@ -336,6 +336,25 @@ class NewsWebSocketServer:
                 f"Client disconnected: {client_id} (total: {client_count})"
             )
 
+    async def broadcast_decision(self, data: dict[str, Any]) -> int:
+        """Broadcast an agent decision to all connected clients."""
+        if not self._clients:
+            return 0
+
+        message = json.dumps({"type": "decision", "data": data})
+
+        async with self._lock:
+            clients = list(self._clients)
+
+        if not clients:
+            return 0
+
+        results = await asyncio.gather(
+            *[self._send_to_client(client, message) for client in clients],
+            return_exceptions=True,
+        )
+        return sum(1 for r in results if r is True)
+
     async def broadcast(
         self,
         news: RawNewsItem,
