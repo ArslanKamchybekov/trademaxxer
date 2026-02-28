@@ -32,6 +32,7 @@ export default function useWebSocket() {
   const [marketStats, setMarketStats] = useState({})
   const [tagStats, setTagStats] = useState({})
   const [sessionStart] = useState(Date.now())
+  const [enabledMarkets, setEnabledMarkets] = useState(new Set())
 
   const ws = useRef(null)
   const seqRef = useRef(0)
@@ -157,6 +158,23 @@ export default function useWebSocket() {
     })
   }, [])
 
+  const toggleMarket = useCallback((address) => {
+    const nowEnabled = !enabledMarkets.has(address)
+    setEnabledMarkets((prev) => {
+      const next = new Set(prev)
+      if (nowEnabled) next.add(address)
+      else next.delete(address)
+      return next
+    })
+    if (ws.current?.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: "toggle_market",
+        address,
+        enabled: nowEnabled,
+      }))
+    }
+  }, [enabledMarkets])
+
   useEffect(() => {
     const connect = () => {
       if (ws.current?.readyState === WebSocket.OPEN) return
@@ -172,6 +190,11 @@ export default function useWebSocket() {
           const msg = JSON.parse(event.data)
           if (msg.type === "news") handleNews(msg.data)
           else if (msg.type === "decision") handleDecision(msg.data)
+          else if (msg.type === "connected" && msg.markets_state) {
+            setEnabledMarkets(new Set(msg.markets_state.enabled || []))
+          } else if (msg.type === "markets_state" && msg.data) {
+            setEnabledMarkets(new Set(msg.data.enabled || []))
+          }
         } catch {}
       }
 
@@ -194,5 +217,6 @@ export default function useWebSocket() {
     status, news, decisions,
     latencyData, throughputData, velocityData,
     stats, marketStats, tagStats, sessionStart,
+    enabledMarkets, toggleMarket,
   }
 }

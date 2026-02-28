@@ -43,21 +43,49 @@ function SignalStrength({ total }) {
   )
 }
 
-export default function MarketGrid({ markets, marketStats }) {
+function AgentToggle({ enabled, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="group relative flex h-[14px] w-[26px] shrink-0 cursor-pointer items-center border border-border px-[2px] transition-colors"
+      style={{
+        backgroundColor: enabled ? "rgba(0, 200, 83, 0.15)" : "rgba(255, 23, 68, 0.08)",
+        borderColor: enabled ? "#00c853" : "#333",
+      }}
+    >
+      <span
+        className="block h-[8px] w-[8px] transition-all duration-150"
+        style={{
+          backgroundColor: enabled ? "#00c853" : "#555",
+          marginLeft: enabled ? "auto" : "0",
+        }}
+      />
+    </button>
+  )
+}
+
+export default function MarketGrid({ markets, marketStats, enabledMarkets, onToggle }) {
+  const enabledCount = markets.filter((m) => enabledMarkets?.has(m.address)).length
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-2 py-1">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
-          Markets
-        </span>
-        <span className="ml-2 tabular text-[10px] text-muted-foreground">
-          {markets.length} active
+      <div className="border-b border-border px-2 py-1 flex items-center justify-between">
+        <div>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
+            Markets
+          </span>
+          <span className="ml-2 tabular text-[10px] text-muted-foreground">
+            {enabledCount}/{markets.length} armed
+          </span>
+        </div>
+        <span className="text-[8px] uppercase tracking-wider text-muted-foreground">
+          Agent
         </span>
       </div>
       <div className="flex-1 overflow-y-auto">
         <table className="w-full text-[10px]">
           <thead>
             <tr className="border-b border-border text-left text-[8px] uppercase text-muted-foreground">
+              <th className="w-[26px] px-1 py-0.5 font-normal text-center">On</th>
               <th className="px-1.5 py-0.5 font-normal">Market</th>
               <th className="px-1.5 py-0.5 font-normal text-right">Prob</th>
               <th className="px-1.5 py-0.5 font-normal text-center">Sig</th>
@@ -71,15 +99,26 @@ export default function MarketGrid({ markets, marketStats }) {
           </thead>
           <tbody>
             {markets.map((m) => {
+              const enabled = enabledMarkets?.has(m.address) ?? true
               const s = marketStats[m.address] || {
                 yes: 0, no: 0, skip: 0, lastAction: null,
                 avgConf: 0, totalSignals: 0, latencies: [],
               }
               const lastColor = ACTION_COLOR[s.lastAction] || "text-muted-foreground"
               const total = s.yes + s.no + s.skip
+              const dimClass = enabled ? "" : "opacity-30"
               return (
-                <tr key={m.address} className="border-b border-border/30 hover:bg-accent/30">
-                  <td className="max-w-[180px] truncate px-1.5 py-1 text-foreground/90">
+                <tr
+                  key={m.address}
+                  className={`border-b border-border/30 hover:bg-accent/30 transition-opacity duration-200 ${dimClass}`}
+                >
+                  <td className="px-1 py-1 text-center">
+                    <AgentToggle
+                      enabled={enabled}
+                      onClick={() => onToggle?.(m.address)}
+                    />
+                  </td>
+                  <td className="max-w-[160px] truncate px-1.5 py-1 text-foreground/90">
                     {m.question}
                   </td>
                   <td className="tabular whitespace-nowrap px-1.5 py-1 text-right text-amber">

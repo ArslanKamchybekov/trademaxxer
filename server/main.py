@@ -62,6 +62,8 @@ async def run(*, use_mock: bool = False) -> None:
         from news_streamer.dbnews_client import DBNewsWebSocketClient
         dbnews_client = DBNewsWebSocketClient(settings.dbnews.ws_url)
 
+    redis_live = False
+
     # ── Markets ────────────────────────────────────────────────────
     from agents.schemas import MarketConfig, StoryPayload
 
@@ -90,7 +92,94 @@ async def run(*, use_mock: bool = False) -> None:
             current_probability=0.31,
             tags=("crypto",),
         ),
+        MarketConfig(
+            address="FakeContract5555555555555555555555555555555",
+            question="Will Ethereum flip Bitcoin in market cap before 2027?",
+            current_probability=0.08,
+            tags=("crypto",),
+        ),
+        MarketConfig(
+            address="FakeContract6666666666666666666666666666666",
+            question="Will China invade Taiwan before January 2027?",
+            current_probability=0.12,
+            tags=("geopolitics", "politics"),
+        ),
+        MarketConfig(
+            address="FakeContract7777777777777777777777777777777",
+            question="Will US unemployment exceed 5% before October 2026?",
+            current_probability=0.24,
+            tags=("macro", "economic_data"),
+        ),
+        MarketConfig(
+            address="FakeContract8888888888888888888888888888888",
+            question="Will gold exceed $3500/oz before August 2026?",
+            current_probability=0.47,
+            tags=("commodities", "macro"),
+        ),
+        MarketConfig(
+            address="FakeContract9999999999999999999999999999999",
+            question="Will the EU impose new sanctions on Russia before May 2026?",
+            current_probability=0.72,
+            tags=("geopolitics", "politics"),
+        ),
+        MarketConfig(
+            address="FakeContractAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            question="Will the S&P 500 hit a new all-time high before July 2026?",
+            current_probability=0.61,
+            tags=("macro", "economic_data"),
+        ),
+        MarketConfig(
+            address="FakeContractBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            question="Will a major US bank fail before December 2026?",
+            current_probability=0.05,
+            tags=("macro", "economic_data"),
+        ),
+        MarketConfig(
+            address="FakeContractCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            question="Will natural gas prices exceed $5/MMBtu before winter 2026?",
+            current_probability=0.33,
+            tags=("commodities", "macro"),
+        ),
     ]
+
+    # ── Market state (all OFF by default — user enables via UI) ──
+    enabled_markets: set[str] = set()
+    market_listeners: dict[str, asyncio.Task] = {}
+
+    def _markets_state_payload() -> dict:
+        """Build the markets state dict for broadcasting to clients."""
+        return {
+            "markets": [m.to_dict() for m in test_markets],
+            "enabled": list(enabled_markets),
+        }
+
+    async def _handle_command(data: dict) -> None:
+        """Handle commands from the UI (toggle_market, etc.)."""
+        address = data.get("address", "")
+        want_enabled = data.get("enabled", True)
+        market = next((m for m in test_markets if m.address == address), None)
+        if not market:
+            return
+
+        if want_enabled and address not in enabled_markets:
+            enabled_markets.add(address)
+            logger.info(f"Market enabled: {address[:16]}…")
+            if redis_live and not use_mock:
+                _spawn_listener(market)
+        elif not want_enabled and address in enabled_markets:
+            enabled_markets.discard(address)
+            logger.info(f"Market disabled: {address[:16]}…")
+            task = market_listeners.pop(address, None)
+            if task:
+                task.cancel()
+
+        ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
+        await ws_server.broadcast_json({
+            "type": "markets_state",
+            "data": _markets_state_payload(),
+        })
+
+    ws_server.set_command_handler(_handle_command)
 
     # ── News callback ──────────────────────────────────────────────
     message_count = 0
@@ -125,7 +214,6 @@ async def run(*, use_mock: bool = False) -> None:
             except Exception as e:
                 logger.error(f"Redis publish failed: {e}")
 
-        # In mock mode, run agents inline (no Redis/Modal needed)
         if use_mock and tagged is not None:
             story = StoryPayload(
                 id=news.id,
@@ -136,7 +224,8 @@ async def run(*, use_mock: bool = False) -> None:
                 timestamp=datetime.now(timezone.utc),
             )
             for market in test_markets:
-                asyncio.create_task(_mock_eval_and_broadcast(story, market))
+                if market.address in enabled_markets:
+                    asyncio.create_task(_mock_eval_and_broadcast(story, market))
 
     # ── Mock agent evaluator (inline, no Redis/Modal) ─────────────
 
@@ -186,6 +275,22 @@ async def run(*, use_mock: bool = False) -> None:
         except Exception as e:
             logger.warning(f"Modal warm-up failed (non-fatal): {e}")
 
+    # ── Dynamic listener spawner ───────────────────────────────────
+
+    def _spawn_listener(market: MarketConfig) -> None:
+        """Spawn a single agent listener for a market and track it."""
+        from agents.listener import AgentListener
+
+        async def _broadcast_decision(data):
+            await ws_server.broadcast_decision(data)
+
+        listener = AgentListener(market, REDIS_URL, on_decision=_broadcast_decision)
+        task = asyncio.create_task(
+            listener.run(), name=f"agent-{market.address[:12]}"
+        )
+        market_listeners[market.address] = task
+        logger.info(f"Listener spawned for {market.address[:16]}…")
+
     # ── Register callbacks ─────────────────────────────────────────
     if dbnews_client is not None:
         dbnews_client.on_message(on_news)
@@ -200,9 +305,6 @@ async def run(*, use_mock: bool = False) -> None:
         f"ws://{settings.websocket_server.host}:{settings.websocket_server.port}"
     )
 
-    # Connect to Redis (skip in mock mode)
-    redis_live = False
-    listener_tasks: list[asyncio.Task] = []
     mock_task: asyncio.Task | None = None
 
     if use_mock:
@@ -219,19 +321,15 @@ async def run(*, use_mock: bool = False) -> None:
         # Warm up Modal container
         await _warmup_modal(test_markets[0])
 
-        # Start agent listeners (subscribe to Redis channels → Modal)
+        # Start agent listeners for all enabled markets
         if redis_live:
-            from agents.listener import run_all_listeners
+            for market in test_markets:
+                if market.address in enabled_markets:
+                    _spawn_listener(market)
+            logger.info(f"{len(market_listeners)} agent listener(s) running")
 
-            async def _broadcast_decision(data):
-                await ws_server.broadcast_decision(data)
-
-            listener_tasks = await run_all_listeners(
-                markets=test_markets,
-                redis_url=REDIS_URL,
-                on_decision=_broadcast_decision,
-            )
-            logger.info(f"{len(listener_tasks)} agent listener(s) running")
+    # Set initial markets state for new client connections
+    ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
 
     # Connect to news source
     if use_mock:
@@ -258,10 +356,10 @@ async def run(*, use_mock: bool = False) -> None:
         except asyncio.CancelledError:
             pass
 
-    for task in listener_tasks:
+    for task in market_listeners.values():
         task.cancel()
-    if listener_tasks:
-        await asyncio.gather(*listener_tasks, return_exceptions=True)
+    if market_listeners:
+        await asyncio.gather(*market_listeners.values(), return_exceptions=True)
         logger.info("Agent listeners stopped")
 
     if redis_live:

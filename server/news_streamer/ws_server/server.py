@@ -203,6 +203,16 @@ class NewsWebSocketServer:
         self._messages_broadcast = 0
         self._start_time: Optional[datetime] = None
         self._lock = asyncio.Lock()
+        self._on_command: Optional[Any] = None
+        self._welcome_extra: Optional[dict] = None
+
+    def set_command_handler(self, handler) -> None:
+        """Register a callback for client commands (toggle_market, etc.)."""
+        self._on_command = handler
+
+    def set_welcome_extra(self, data: dict) -> None:
+        """Set extra data to include in welcome message (e.g. markets state)."""
+        self._welcome_extra = data
 
     async def _authenticate(
         self,
@@ -304,16 +314,15 @@ class NewsWebSocketServer:
             "message": "Connected to Kairos News Stream",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        if self._welcome_extra:
+            welcome.update(self._welcome_extra)
         try:
             await websocket.send(json.dumps(welcome))
         except Exception as e:
             logger.warning(f"Failed to send welcome: {e}")
 
         try:
-            # Keep connection alive and handle any client messages
             async for message in websocket:
-                # Currently we don't expect client messages,
-                # but we can add filtering/subscription logic here
                 try:
                     data = json.loads(message)
                     msg_type = data.get("type", "")
@@ -322,6 +331,8 @@ class NewsWebSocketServer:
                         await websocket.send(
                             json.dumps({"type": "pong"})
                         )
+                    elif msg_type == "toggle_market" and self._on_command:
+                        await self._on_command(data)
                 except json.JSONDecodeError:
                     pass
 
@@ -335,6 +346,21 @@ class NewsWebSocketServer:
             logger.info(
                 f"Client disconnected: {client_id} (total: {client_count})"
             )
+
+    async def broadcast_json(self, payload: dict[str, Any]) -> int:
+        """Broadcast an arbitrary JSON message to all connected clients."""
+        if not self._clients:
+            return 0
+        message = json.dumps(payload)
+        async with self._lock:
+            clients = list(self._clients)
+        if not clients:
+            return 0
+        results = await asyncio.gather(
+            *[self._send_to_client(c, message) for c in clients],
+            return_exceptions=True,
+        )
+        return sum(1 for r in results if r is True)
 
     async def broadcast_decision(self, data: dict[str, Any]) -> int:
         """Broadcast an agent decision to all connected clients."""
