@@ -7,8 +7,6 @@ const badgeVariants = cva(
     variants: {
       variant: {
         default: "bg-primary/15 text-primary",
-        bullish: "bg-bullish/15 text-bullish",
-        bearish: "bg-bearish/15 text-bearish",
         neutral: "bg-muted text-muted-foreground",
         outline: "border border-border text-muted-foreground",
         ticker: "bg-primary/10 text-primary font-mono text-[11px]",

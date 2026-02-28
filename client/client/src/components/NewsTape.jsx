@@ -27,11 +27,6 @@ const SOURCE_COLOR = {
   RSS: "text-yellow-400",
 }
 
-const SENTIMENT_COLOR = {
-  bullish: "text-yes",
-  bearish: "text-no",
-  neutral: "text-muted-foreground",
-}
 
 function formatTime(iso) {
   if (!iso) return "--:--:--"
@@ -198,7 +193,6 @@ function NewsDetail({ item }) {
 
 function NewsRow({ item, idx, isExpanded, onToggle }) {
   const urg = URGENCY_LABEL[item.urgency] || URGENCY_LABEL.normal
-  const sentColor = SENTIMENT_COLOR[item.sentiment] || SENTIMENT_COLOR.neutral
   const cats = (item.categories || []).slice(0, 3)
   const age = item._ts ? `${Math.floor((Date.now() - item._ts) / 1000)}s` : ""
   const srcAbbr = SOURCE_ABBR[item.sourceType] || item.sourceType?.slice(0, 3).toUpperCase() || ""
@@ -213,8 +207,21 @@ function NewsRow({ item, idx, isExpanded, onToggle }) {
         <span className="tabular shrink-0 text-[9px] text-muted-foreground/60 w-4 text-right">
           {idx + 1}
         </span>
+<<<<<<< Updated upstream
         <span className="tabular shrink-0 text-muted-foreground">
           {formatTime(item.timestamp)}
+=======
+      )}
+      {urg.text && (
+        <span className={`shrink-0 font-bold ${urg.color}`}>{urg.text}</span>
+      )}
+      <span className="min-w-0 flex-1 truncate text-foreground">
+        {item.headline}
+      </span>
+      {cats.map((c) => (
+        <span key={c} className="shrink-0 text-[8px] uppercase text-amber-dim">
+          {c}
+>>>>>>> Stashed changes
         </span>
         {srcAbbr && (
           <span className={`shrink-0 text-[8px] font-bold ${SOURCE_COLOR[srcAbbr] || "text-blue-400"}`} title={srcHandle || srcAbbr}>

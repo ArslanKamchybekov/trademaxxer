@@ -187,7 +187,7 @@ pip install -r requirements.txt
 # 2. Modal
 pip install modal
 modal setup                              # authenticate (opens browser)
-modal deploy agents/modal_app_fast.py    # deploy ONNX NLI agent (~2 min)
+modal deploy agents/modal_app.py    # deploy ONNX NLI agent (~2 min)
 
 # 3. Frontend
 cd client/client && npm install

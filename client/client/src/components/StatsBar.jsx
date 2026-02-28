@@ -1,10 +1,7 @@
-import { TrendingUp, TrendingDown, Minus, Activity } from "lucide-react"
+import { Activity } from "lucide-react"
 
 const stats = [
   { key: "total", label: "Events", icon: Activity, color: "text-foreground" },
-  { key: "bullish", label: "Bullish", icon: TrendingUp, color: "text-bullish" },
-  { key: "bearish", label: "Bearish", icon: TrendingDown, color: "text-bearish" },
-  { key: "neutral", label: "Neutral", icon: Minus, color: "text-neutral" },
 ]
 
 export default function StatsBar({ data }) {

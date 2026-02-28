@@ -14,7 +14,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional, Set
 
-import jwt
+# JWT import is conditional - only needed if authentication is configured
+try:
+    import jwt
+    JWT_AVAILABLE = True
+except ImportError:
+    JWT_AVAILABLE = False
+    jwt = None
 import websockets
 from websockets.server import WebSocketServerProtocol, serve
 
@@ -70,7 +76,7 @@ def _verify_jwt_token(token: str) -> Optional[dict]:
 
     Returns None if token is invalid.
     """
-    if not token or not JWT_SECRET:
+    if not token or not JWT_SECRET or not JWT_AVAILABLE:
         return None
 
     try:

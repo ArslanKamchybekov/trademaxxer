@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from ..lib.sentiment_analyzer import get_analyzer
 from ..models.news import (
     Category,
     RawNewsItem,
@@ -53,10 +52,9 @@ class NewsTagger:
     Transforms RawNewsItem into TaggedNewsItem by:
     1. Extracting tickers (using DBNews coins as base)
     2. Classifying categories (using DBNews filterReasons as hints)
-    3. Analyzing sentiment (VADER + financial domain knowledge)
-    4. Extracting keywords (using DBNews highlightedWords)
-    5. Determining urgency (from DBNews tags)
-    6. Matching platform tags (from market_platform_tags in ClickHouse)
+    3. Extracting keywords (using DBNews highlightedWords)
+    4. Determining urgency (from DBNews tags)
+    5. Matching platform tags (from market_platform_tags in ClickHouse)
     """
 
     def __init__(
@@ -68,15 +66,12 @@ class NewsTagger:
         self._platform_tag_loader = platform_tag_loader
         self._stats = TaggerStats()
 
-        # Initialize financial sentiment analyzer (VADER + financial domain)
-        self._sentiment_analyzer = get_analyzer()
 
         logger.info(
             "NewsTagger initialized",
             extra={
                 "use_dbnews_hints": config.use_dbnews_hints,
                 "platform_tags_enabled": platform_tag_loader is not None,
-                "sentiment_analyzer": "FinancialSentimentAnalyzer",
             },
         )
 
@@ -98,8 +93,9 @@ class NewsTagger:
             # Classify categories
             categories = self._classify_categories(news)
 
-            # Analyze sentiment
-            sentiment, sentiment_score = self._analyze_sentiment(news)
+            # Default neutral sentiment (no sentiment analysis)
+            sentiment = Sentiment.NEUTRAL
+            sentiment_score = 0.0
 
             # Extract keywords
             keywords = self._extract_keywords(news)
@@ -241,48 +237,6 @@ class NewsTagger:
 
         return cats
 
-    def _analyze_sentiment(self, news: RawNewsItem) -> tuple[Sentiment, float]:
-        """
-        Analyze sentiment of news using VADER + financial domain knowledge.
-
-        Uses FinancialSentimentAnalyzer which combines:
-        - VADER base sentiment analysis
-        - Financial phrase detection (rate cuts, earnings beat, etc.)
-        - Economic indicator patterns (CPI, GDP, unemployment)
-        """
-        # Combine headline and body for analysis
-        text = news.headline
-        if news.body:
-            text = f"{text} {news.body}"
-
-        # Get sentiment from financial analyzer
-        result = self._sentiment_analyzer.analyze(text)
-
-        # Map string sentiment to enum
-        sentiment_str = result["sentiment"]
-        if sentiment_str == "bullish":
-            sentiment = Sentiment.BULLISH
-        elif sentiment_str == "bearish":
-            sentiment = Sentiment.BEARISH
-        else:
-            sentiment = Sentiment.NEUTRAL
-
-        score = result["score"]
-
-        # Log matched signals for debugging (only if there are any)
-        if result.get("matched_signals"):
-            logger.debug(
-                f"Sentiment analysis for {news.id}: {sentiment_str} ({score:.3f})",
-                extra={
-                    "news_id": news.id,
-                    "sentiment": sentiment_str,
-                    "score": score,
-                    "matched_signals": result["matched_signals"],
-                    "processing_time_ms": result["processing_time_ms"],
-                },
-            )
-
-        return sentiment, score
 
     def _extract_keywords(self, news: RawNewsItem) -> tuple[str, ...]:
         """Extract keywords from news."""

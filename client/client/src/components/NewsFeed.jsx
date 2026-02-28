@@ -4,16 +4,11 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Zap, Flame, Newspaper, Clock } from "lucide-react"
 
 const urgencyConfig = {
-  breaking: { icon: Flame, label: "Breaking", className: "text-bearish" },
+  breaking: { icon: Flame, label: "Breaking", className: "text-red-500" },
   high: { icon: Zap, label: "High", className: "text-yellow-400" },
   normal: { icon: Newspaper, label: "", className: "text-muted-foreground" },
 }
 
-const sentimentVariant = {
-  bullish: "bullish",
-  bearish: "bearish",
-  neutral: "neutral",
-}
 
 function formatTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString([], {
@@ -31,7 +26,7 @@ function NewsItem({ item }) {
     <div className="group relative border-b border-border/50 px-4 py-3.5 transition-colors hover:bg-card/80 animate-slide-in"
     >
       {item.urgency === "breaking" && (
-        <div className="absolute inset-y-0 left-0 w-0.5 bg-bearish" />
+        <div className="absolute inset-y-0 left-0 w-0.5 bg-red-500" />
       )}
 
       <div className="flex items-start gap-3">
@@ -50,11 +45,6 @@ function NewsItem({ item }) {
               {formatTime(item.timestamp)}
             </span>
 
-            {item.sentiment && (
-              <Badge variant={sentimentVariant[item.sentiment] || "neutral"}>
-                {item.sentiment}
-              </Badge>
-            )}
 
             {item.tickers?.slice(0, 4).map((ticker) => (
               <Badge key={ticker} variant="ticker">
