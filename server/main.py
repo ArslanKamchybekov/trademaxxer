@@ -2,15 +2,15 @@
 trademaxxer server — top-level orchestrator
 
 Runs all services in a single async event loop:
-  - news_streamer: DBNews websocket → tagger → broadcast (WS + Redis pub/sub)
-  - agent listeners: subscribe to Redis channels → Modal (NLI) → log decisions
+  - news_streamer: DBNews websocket → tagger → broadcast
+  - agent dispatch: news → tag-filter → chunked parallel Modal RPCs → decisions
   - (future) executor: decision queue → proprietary trade API
   - (future) monitor: position tracking + exit logic
 
 Usage:
     cd server
-    python main.py                # live: DBNews + Redis + Modal
-    python main.py --mock         # mock: fake headlines + fake agents (no Redis/Modal)
+    python main.py                # live: DBNews + Modal (NLI, direct dispatch)
+    python main.py --mock         # mock: fake headlines + fake agents (no Modal)
 """
 from __future__ import annotations
 
@@ -34,7 +34,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("trademaxxer")
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+BATCH_SIZE = 50
+
+_fast_agent = None
+
+
+def _get_fast_agent():
+    """Lazy-init the FastMarketAgent Modal handle (singleton)."""
+    global _fast_agent
+    if _fast_agent is None:
+        import modal
+        Cls = modal.Cls.from_name("trademaxxer-agents-fast", "FastMarketAgent")
+        _fast_agent = Cls()
+    return _fast_agent
 
 
 async def run(*, use_mock: bool = False) -> None:
@@ -48,21 +60,17 @@ async def run(*, use_mock: bool = False) -> None:
     from news_streamer.config import settings
     from news_streamer.tagger import NewsTagger
     from news_streamer.ws_server import NewsWebSocketServer
-    from news_streamer.pubsub import NewsPublisher
 
     ws_server = NewsWebSocketServer(
         host=settings.websocket_server.host,
         port=settings.websocket_server.port,
     )
     tagger = NewsTagger(settings.tagger, platform_tag_loader=None)
-    publisher = NewsPublisher(redis_url=REDIS_URL)
 
     dbnews_client = None
     if not use_mock:
         from news_streamer.dbnews_client import DBNewsWebSocketClient
         dbnews_client = DBNewsWebSocketClient(settings.dbnews.ws_url)
-
-    redis_live = False
 
     # ── Markets ────────────────────────────────────────────────────
     from agents.schemas import MarketConfig, StoryPayload
@@ -142,36 +150,29 @@ async def run(*, use_mock: bool = False) -> None:
         ),
     ]
 
+    market_by_addr = {m.address: m for m in test_markets}
+
     # ── Market state (all OFF by default — user enables via UI) ──
     enabled_markets: set[str] = set()
-    market_listeners: dict[str, asyncio.Task] = {}
 
     def _markets_state_payload() -> dict:
-        """Build the markets state dict for broadcasting to clients."""
         return {
             "markets": [m.to_dict() for m in test_markets],
             "enabled": list(enabled_markets),
         }
 
     async def _handle_command(data: dict) -> None:
-        """Handle commands from the UI (toggle_market, etc.)."""
         address = data.get("address", "")
         want_enabled = data.get("enabled", True)
-        market = next((m for m in test_markets if m.address == address), None)
-        if not market:
+        if address not in market_by_addr:
             return
 
         if want_enabled and address not in enabled_markets:
             enabled_markets.add(address)
             logger.info(f"Market enabled: {address[:16]}…")
-            if redis_live and not use_mock:
-                _spawn_listener(market)
         elif not want_enabled and address in enabled_markets:
             enabled_markets.discard(address)
             logger.info(f"Market disabled: {address[:16]}…")
-            task = market_listeners.pop(address, None)
-            if task:
-                task.cancel()
 
         ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
         await ws_server.broadcast_json({
@@ -206,28 +207,26 @@ async def run(*, use_mock: bool = False) -> None:
         except Exception as e:
             logger.error(f"Tagger failed: {e}", extra={"news_id": news.id})
 
-        await ws_server.broadcast(news, tagged)
+        # Fire-and-forget dashboard broadcast
+        asyncio.create_task(ws_server.broadcast(news, tagged))
 
-        if tagged is not None and redis_live:
-            try:
-                await publisher.publish(tagged)
-            except Exception as e:
-                logger.error(f"Redis publish failed: {e}")
+        story = StoryPayload(
+            id=news.id,
+            headline=news.headline,
+            body=getattr(news, "body", ""),
+            tags=tuple(tagged.categories) if tagged and tagged.categories else (),
+            source=getattr(news, "source_handle", ""),
+            timestamp=datetime.now(timezone.utc),
+        )
 
-        if use_mock and tagged is not None:
-            story = StoryPayload(
-                id=news.id,
-                headline=news.headline,
-                body=getattr(news, "body", ""),
-                tags=tuple(tagged.categories) if tagged.categories else (),
-                source=getattr(news, "source_handle", ""),
-                timestamp=datetime.now(timezone.utc),
-            )
+        if use_mock:
             for market in test_markets:
                 if market.address in enabled_markets:
                     asyncio.create_task(_mock_eval_and_broadcast(story, market))
+        elif enabled_markets:
+            asyncio.create_task(_nli_eval_and_broadcast(story))
 
-    # ── Mock agent evaluator (inline, no Redis/Modal) ─────────────
+    # ── Mock agent evaluator (inline, no Modal) ───────────────────
 
     async def _mock_eval_and_broadcast(story: StoryPayload, market: MarketConfig) -> None:
         from mock_feed import mock_evaluate
@@ -246,50 +245,81 @@ async def run(*, use_mock: bool = False) -> None:
         payload = decision.to_dict()
         payload["headline"] = story.headline
         payload["market_question"] = market.question
-        await ws_server.broadcast_decision(payload)
+        asyncio.create_task(ws_server.broadcast_decision(payload))
+
+    # ── NLI direct dispatch (tag-filter → chunk → parallel RPCs) ─
+
+    async def _nli_eval_and_broadcast(story: StoryPayload) -> None:
+        """Tag-filter enabled markets, chunk into batches, fire parallel Modal RPCs."""
+        story_tags = set(story.tags)
+        matching = [
+            m for m in test_markets
+            if m.address in enabled_markets and story_tags & set(m.tags)
+        ]
+        if not matching:
+            return
+
+        agent = _get_fast_agent()
+        chunks = [matching[i:i + BATCH_SIZE] for i in range(0, len(matching), BATCH_SIZE)]
+
+        async def _eval_chunk(markets_chunk):
+            batch = [
+                {
+                    "headline": story.headline,
+                    "question": m.question,
+                    "probability": m.current_probability,
+                    "market_address": m.address,
+                    "story_id": story.id,
+                }
+                for m in markets_chunk
+            ]
+            return await agent.evaluate_batch.remote.aio(batch)
+
+        t0 = time.monotonic()
+        try:
+            chunk_results = await asyncio.gather(
+                *[_eval_chunk(c) for c in chunks]
+            )
+        except Exception as e:
+            logger.error(f"NLI batch eval failed: {e}")
+            return
+        rpc_ms = (time.monotonic() - t0) * 1000
+
+        for results in chunk_results:
+            for result in results:
+                result["latency_ms"] = round(rpc_ms, 1)
+                result["headline"] = story.headline
+                mkt = market_by_addr.get(result["market_address"])
+                if mkt:
+                    result["market_question"] = mkt.question
+                action = result["action"]
+                conf = result["confidence"]
+                addr = result["market_address"][:16]
+                logger.info(
+                    f"[{action}] {addr}… conf={conf:.2f} ({rpc_ms:.0f}ms) "
+                    f"| {story.headline[:60]}"
+                )
+                asyncio.create_task(ws_server.broadcast_decision(result))
 
     # ── Modal warm-up ──────────────────────────────────────────────
 
-    async def _warmup_modal(market: MarketConfig) -> None:
-        """Fire a dummy evaluation to force Modal container boot before real news."""
-        logger.info("Warming up Modal container (NLI agent)...")
+    async def _warmup_modal() -> None:
+        logger.info("Warming up Modal container (ONNX NLI agent)...")
+        dummy_batch = [{
+            "headline": "warmup ping — ignore",
+            "question": test_markets[0].question,
+            "probability": 0.5,
+            "market_address": "warmup",
+            "story_id": "warmup",
+        }]
         try:
-            import modal
-
-            Cls = modal.Cls.from_name("trademaxxer-agents-fast", "FastMarketAgent")
-            agent = Cls()
-
-            dummy_batch = [{
-                "headline": "warmup ping — ignore",
-                "question": market.question,
-                "probability": 0.5,
-                "market_address": "warmup",
-                "story_id": "warmup",
-            }]
-
+            agent = _get_fast_agent()
             t0 = time.monotonic()
             await agent.evaluate_batch.remote.aio(dummy_batch)
             warmup_ms = (time.monotonic() - t0) * 1000
-
             logger.info(f"Modal warm-up complete — {warmup_ms:.0f}ms (container is hot)")
         except Exception as e:
             logger.warning(f"Modal warm-up failed (non-fatal): {e}")
-
-    # ── Dynamic listener spawner ───────────────────────────────────
-
-    def _spawn_listener(market: MarketConfig) -> None:
-        """Spawn a single agent listener for a market and track it."""
-        from agents.listener import AgentListener
-
-        async def _broadcast_decision(data):
-            await ws_server.broadcast_decision(data)
-
-        listener = AgentListener(market, REDIS_URL, on_decision=_broadcast_decision)
-        task = asyncio.create_task(
-            listener.run(), name=f"agent-{market.address[:12]}"
-        )
-        market_listeners[market.address] = task
-        logger.info(f"Listener spawned for {market.address[:16]}…")
 
     # ── Register callbacks ─────────────────────────────────────────
     if dbnews_client is not None:
@@ -308,30 +338,12 @@ async def run(*, use_mock: bool = False) -> None:
     mock_task: asyncio.Task | None = None
 
     if use_mock:
-        logger.info("Mock mode — skipping Redis + Modal (agents run inline)")
+        logger.info("Mock mode — agents run inline (no Modal)")
     else:
-        try:
-            await publisher.connect()
-            redis_live = True
-            logger.info(f"NewsPublisher connected to Redis at {REDIS_URL}")
-        except Exception as e:
-            logger.error(f"Failed to connect NewsPublisher to Redis: {e}")
-            logger.error("Agent listeners will NOT start — no Redis connection")
+        await _warmup_modal()
 
-        # Warm up Modal container
-        await _warmup_modal(test_markets[0])
-
-        # Start agent listeners for all enabled markets
-        if redis_live:
-            for market in test_markets:
-                if market.address in enabled_markets:
-                    _spawn_listener(market)
-            logger.info(f"{len(market_listeners)} agent listener(s) running")
-
-    # Set initial markets state for new client connections
     ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
 
-    # Connect to news source
     if use_mock:
         from mock_feed import run_mock_feed
 
@@ -341,7 +353,7 @@ async def run(*, use_mock: bool = False) -> None:
         logger.info("Mock news feed started — decisions will be generated inline")
     else:
         await dbnews_client.connect()
-        logger.info("Connected to DBNews feed — pipeline is live")
+        logger.info("Connected to DBNews feed — NLI pipeline is live (direct dispatch)")
 
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
@@ -355,15 +367,6 @@ async def run(*, use_mock: bool = False) -> None:
             await mock_task
         except asyncio.CancelledError:
             pass
-
-    for task in market_listeners.values():
-        task.cancel()
-    if market_listeners:
-        await asyncio.gather(*market_listeners.values(), return_exceptions=True)
-        logger.info("Agent listeners stopped")
-
-    if redis_live:
-        await publisher.close()
 
     await ws_server.stop()
 

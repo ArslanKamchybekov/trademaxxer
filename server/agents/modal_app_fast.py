@@ -1,12 +1,12 @@
 """
-Modal Deployment — FastMarketAgent (NLI)
+Modal Deployment — FastMarketAgent (NLI + ONNX)
 
-Serverless NLI-based classification on Modal. Loads a pretrained
-cross-encoder/nli-deberta-v3-xsmall model directly from HuggingFace.
-No Groq API, no secrets, no network calls from inside the container.
+Serverless NLI-based classification on Modal using ONNX Runtime.
+Loads the pre-exported Xenova/nli-deberta-v3-xsmall ONNX model directly
+from HuggingFace — no PyTorch, no manual export, no secrets.
 
-The model is baked into the image so cold starts don't include a download.
-Batched endpoint: one RPC evaluates all markets for a single story.
+Image is ~300MB (vs ~1.5GB with torch). Cold starts are fast.
+Batched endpoint: one RPC evaluates up to 50 markets per story.
 
 Deploy:
     cd server
@@ -25,19 +25,22 @@ from __future__ import annotations
 
 import modal
 
-MODEL_NAME = "cross-encoder/nli-deberta-v3-xsmall"
+ONNX_REPO = "Xenova/nli-deberta-v3-xsmall"
+ONNX_FILE = "onnx/model.onnx"
+TOKENIZER_NAME = "cross-encoder/nli-deberta-v3-xsmall"
 
 app = modal.App("trademaxxer-agents-fast")
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .pip_install("transformers", "torch", "numpy")
+    .pip_install("onnxruntime", "transformers", "numpy", "huggingface_hub")
     .run_commands(
-        f"python -c \""
-        f"from transformers import AutoTokenizer, AutoModelForSequenceClassification; "
-        f"AutoTokenizer.from_pretrained('{MODEL_NAME}'); "
-        f"AutoModelForSequenceClassification.from_pretrained('{MODEL_NAME}')"
-        f"\""
+        "python -c \""
+        "from huggingface_hub import hf_hub_download; "
+        f"hf_hub_download('{ONNX_REPO}', '{ONNX_FILE}'); "
+        "from transformers import AutoTokenizer; "
+        f"AutoTokenizer.from_pretrained('{TOKENIZER_NAME}')"
+        "\""
     )
     .add_local_python_source("agents")
 )
@@ -46,24 +49,26 @@ image = (
 @app.cls(image=image, scaledown_window=300, buffer_containers=1)
 class FastMarketAgent:
     """
-    NLI-based agent. Classifies (headline, market_question) pairs via
-    entailment/contradiction/neutral → YES/NO/SKIP.
+    ONNX NLI agent. Classifies (headline, market_question) pairs via
+    entailment/contradiction/neutral -> YES/NO/SKIP.
 
     Container lifecycle:
-        - @modal.enter: load model + tokenizer from cache (instant, baked in image)
+        - @modal.enter: load ONNX model + tokenizer from cache (baked in image)
         - evaluate_batch(): batched inference, returns list of Decision dicts
         - Container stays warm for 5min, then scales to zero
     """
 
     @modal.enter()
     def init(self) -> None:
-        import torch
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        import onnxruntime as ort
+        from huggingface_hub import hf_hub_download
+        from transformers import AutoTokenizer
 
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        self.model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME)
-        self.model.eval()
-        self.device = "cpu"
+        model_path = hf_hub_download(ONNX_REPO, ONNX_FILE)
+        self.session = ort.InferenceSession(
+            model_path, providers=["CPUExecutionProvider"]
+        )
+        self.tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 
     @modal.method()
     def evaluate_batch(self, items: list[dict]) -> list[dict]:
@@ -76,7 +81,6 @@ class FastMarketAgent:
         import time
 
         import numpy as np
-        import torch
 
         from agents.nli_postprocess import postprocess_logits
 
@@ -91,12 +95,16 @@ class FastMarketAgent:
             padding=True,
             truncation=True,
             max_length=128,
-            return_tensors="pt",
+            return_tensors="np",
         )
 
-        with torch.no_grad():
-            outputs = self.model(**tokens)
-            logits = outputs.logits.numpy()
+        logits = self.session.run(
+            None,
+            {
+                "input_ids": tokens["input_ids"],
+                "attention_mask": tokens["attention_mask"],
+            },
+        )[0]
 
         inference_ms = (time.monotonic() - t0) * 1000
 
