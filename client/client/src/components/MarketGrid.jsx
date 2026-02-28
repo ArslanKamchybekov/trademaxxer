@@ -152,12 +152,9 @@ export default function MarketGrid({ markets, marketStats, enabledMarkets, onTog
               <th className="w-[26px] px-1 py-0.5 font-normal text-center">On</th>
               <th className="px-1.5 py-0.5 font-normal">Market</th>
               <th className="px-1.5 py-0.5 font-normal text-right">Prob</th>
-              <th className="px-1.5 py-0.5 font-normal text-center">Sig</th>
               <th className="px-1.5 py-0.5 font-normal text-center">Y</th>
               <th className="px-1.5 py-0.5 font-normal text-center">N</th>
               <th className="px-1.5 py-0.5 font-normal text-center">S</th>
-              <th className="px-1.5 py-0.5 font-normal text-right">Conf</th>
-              <th className="px-1.5 py-0.5 font-normal text-center">Lat</th>
               <th className="px-1.5 py-0.5 font-normal text-right">Last</th>
             </tr>
           </thead>
@@ -169,7 +166,6 @@ export default function MarketGrid({ markets, marketStats, enabledMarkets, onTog
                 avgConf: 0, totalSignals: 0, latencies: [],
               }
               const lastColor = ACTION_COLOR[s.lastAction] || "text-muted-foreground"
-              const total = s.yes + s.no + s.skip
               const dimClass = enabled ? "" : "opacity-30"
               return (
                 <tr
@@ -182,14 +178,11 @@ export default function MarketGrid({ markets, marketStats, enabledMarkets, onTog
                       onClick={() => onToggle?.(m.address)}
                     />
                   </td>
-                  <td className="max-w-[160px] truncate px-1.5 py-1 text-foreground/90">
+                  <td className="max-w-[180px] truncate px-1.5 py-1 text-foreground/90">
                     {m.question}
                   </td>
                   <td className="tabular whitespace-nowrap px-1.5 py-1 text-right text-amber">
                     {(m.current_probability * 100).toFixed(0)}%
-                  </td>
-                  <td className="px-1.5 py-1 text-center">
-                    <SignalStrength total={total} />
                   </td>
                   <td className="tabular px-1.5 py-1 text-center text-yes">
                     {s.yes || "·"}
@@ -199,15 +192,6 @@ export default function MarketGrid({ markets, marketStats, enabledMarkets, onTog
                   </td>
                   <td className="tabular px-1.5 py-1 text-center text-muted-foreground">
                     {s.skip || "·"}
-                  </td>
-                  <td className="tabular px-1.5 py-1 text-right text-amber-dim">
-                    {s.avgConf ? `${(s.avgConf * 100).toFixed(0)}%` : "—"}
-                  </td>
-                  <td className="px-1.5 py-1 text-center">
-                    <MicroSparkline
-                      values={s.latencies || []}
-                      color="#ff9800"
-                    />
                   </td>
                   <td className={`tabular px-1.5 py-1 text-right font-bold ${lastColor}`}>
                     {s.lastAction || "—"}

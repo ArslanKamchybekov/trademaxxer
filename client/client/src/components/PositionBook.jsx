@@ -120,7 +120,6 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
                   return (
                     <tr key={`agent-${m.address}`} className="border-b border-border/30">
                       <td className="max-w-[140px] truncate px-1.5 py-1 text-foreground/80">
-                        <span className="text-[8px] text-muted-foreground mr-1">🤖</span>
                         {m.question.slice(0, 35)}…
                       </td>
                       <td className="px-1.5 py-1">
@@ -153,14 +152,14 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
                   const hasManual = tradesForMarket.some(t => t.type === "manual")
                   const hasAgent = tradesForMarket.some(t => t.type === "agent")
 
-                  let tradeTypeIcon = "👤" // manual
-                  if (hasAgent && hasManual) tradeTypeIcon = "🤖👤" // both
-                  else if (hasAgent) tradeTypeIcon = "🤖" // agent only
+                  let tradeTypeLabel = "M"
+                  if (hasAgent && hasManual) tradeTypeLabel = "A+M"
+                  else if (hasAgent) tradeTypeLabel = "A"
 
                   return (
                     <tr key={`trade-${market.address}`} className="border-b border-border/30">
                       <td className="max-w-[140px] truncate px-1.5 py-1 text-foreground/80">
-                        <span className="text-[8px] text-muted-foreground mr-1">{tradeTypeIcon}</span>
+                        <span className="text-[8px] text-muted-foreground/50 mr-1">{tradeTypeLabel}</span>
                         {market.question.slice(0, 35)}…
                       </td>
                       <td className="px-1.5 py-1">
