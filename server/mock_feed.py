@@ -213,17 +213,20 @@ async def mock_evaluate(story: StoryPayload, market: MarketConfig) -> Decision:
     latency = random.uniform(150, 400)
     await asyncio.sleep(latency / 1000)
 
+    current_prob = market.current_probability
     roll = random.random()
     if roll < 0.35:
         action = "YES"
-        confidence = round(random.uniform(0.55, 0.95), 2)
+        theo = round(min(0.99, current_prob + random.uniform(0.05, 0.25)), 3)
     elif roll < 0.65:
         action = "NO"
-        confidence = round(random.uniform(0.50, 0.90), 2)
+        theo = round(max(0.01, current_prob - random.uniform(0.05, 0.25)), 3)
     else:
         action = "SKIP"
-        confidence = round(random.uniform(0.10, 0.50), 2)
+        theo = round(current_prob + random.uniform(-0.02, 0.02), 3)
 
+    delta = abs(theo - current_prob)
+    confidence = round(min(delta * 2.0, 1.0), 3)
     reasoning = random.choice(MOCK_REASONING[action])
 
     return Decision(
@@ -234,4 +237,5 @@ async def mock_evaluate(story: StoryPayload, market: MarketConfig) -> Decision:
         story_id=story.id,
         latency_ms=round(latency, 1),
         prompt_version="mock",
+        theo=theo,
     )

@@ -15,6 +15,8 @@ from agents.schemas import Decision, MarketConfig, StoryPayload
 
 logger = logging.getLogger(__name__)
 
+SKIP_THRESHOLD = 0.03
+
 
 async def evaluate(
     story: StoryPayload,
@@ -24,8 +26,8 @@ async def evaluate(
     """
     Classify a single (story, market) pair via Groq.
 
-    Returns a Decision with action, confidence, reasoning, and timing metadata.
-    Raises GroqClassificationError on unrecoverable failure.
+    Groq returns YES/NO + theo. If |theo - current| < SKIP_THRESHOLD
+    the action is overridden to SKIP. Confidence is derived from the delta.
     """
     user_prompt = build_user_prompt(
         headline=story.headline,
@@ -40,22 +42,29 @@ async def evaluate(
 
     latency_ms = result.get("_latency_ms", fallback_latency)
 
-    confidence = result.get("confidence", 0.5)
-    confidence = max(0.0, min(1.0, float(confidence)))
+    theo = result.get("theo")
+    if theo is not None:
+        theo = round(max(0.01, min(0.99, float(theo))), 3)
+
+    delta = abs(theo - market.current_probability) if theo is not None else 0.0
+    action = result["action"] if delta >= SKIP_THRESHOLD else "SKIP"
+    confidence = round(min(delta * 2.0, 1.0), 3)
 
     decision = Decision(
-        action=result["action"],
+        action=action,
         confidence=confidence,
-        reasoning=result.get("reasoning", ""),
+        reasoning="",
         market_address=market.address,
         story_id=story.id,
         latency_ms=round(latency_ms, 1),
         prompt_version=PROMPT_VERSION,
+        theo=theo,
     )
 
-    logger.info(
-        f"[{decision.action}] {market.question[:60]} "
-        f"(conf={decision.confidence:.2f}, {decision.latency_ms:.0f}ms)"
-    )
+    if action != "SKIP":
+        logger.info(
+            f"[{action}] {market.question[:50]} "
+            f"theo={theo:.0%} Δ={delta:+.0%} {latency_ms:.0f}ms"
+        )
 
     return decision

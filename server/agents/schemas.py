@@ -132,6 +132,7 @@ class Decision:
     story_id: str
     latency_ms: float
     prompt_version: str
+    theo: float | None = None
 
     def __post_init__(self) -> None:
         if self.action not in ("YES", "NO", "SKIP"):
@@ -146,6 +147,8 @@ class Decision:
             raise ValueError("story_id must be non-empty")
         if self.latency_ms < 0:
             raise ValueError(f"latency_ms must be non-negative, got {self.latency_ms}")
+        if self.theo is not None and not (0.0 <= self.theo <= 1.0):
+            raise ValueError(f"theo must be in [0.0, 1.0], got {self.theo}")
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -160,4 +163,5 @@ class Decision:
             story_id=d["story_id"],
             latency_ms=d.get("latency_ms", 0.0),
             prompt_version=d.get("prompt_version", "unknown"),
+            theo=d.get("theo"),
         )

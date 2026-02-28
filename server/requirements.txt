@@ -8,10 +8,6 @@ vaderSentiment>=3.3.2
 # ── agents ────────────────────────────────────
 groq>=0.18.0
 modal>=1.0.0
-onnxruntime>=1.17.0
-transformers>=4.37.0
-huggingface_hub>=0.20.0
-numpy>=1.24.0
 
 # ── pub_sub / redis ───────────────────────────
 redis[asyncio]>=5.0

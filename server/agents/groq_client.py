@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 MODEL = "llama-3.1-8b-instant"
 MAX_RETRIES = 1
 TIMEOUT_S = 2.0
-TEMPERATURE = 0.2
-MAX_TOKENS = 128
+TEMPERATURE = 0.1
+MAX_TOKENS = 32
 
 
 class GroqClassificationError(Exception):
@@ -110,13 +110,19 @@ class GroqClient:
                         f"Could not parse action from Groq response: "
                         f"{parsed.get('action')!r}"
                     )
-                parsed["action"] = action
 
-                parsed.setdefault("confidence", 0.5)
-                parsed.setdefault("reasoning", "")
-                parsed["_latency_ms"] = elapsed_ms
+                raw_p = parsed.get("p") or parsed.get("theo")
+                if raw_p is not None:
+                    p = float(raw_p)
+                    theo = max(0.01, min(0.99, p / 100.0 if p > 1.0 else p))
+                else:
+                    theo = None
 
-                return parsed
+                return {
+                    "action": action,
+                    "theo": theo,
+                    "_latency_ms": elapsed_ms,
+                }
 
             except (RateLimitError, APITimeoutError) as e:
                 last_error = e

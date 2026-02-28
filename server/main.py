@@ -3,16 +3,16 @@ trademaxxer server — top-level orchestrator
 
 Runs all services in a single async event loop:
   - news_streamer: DBNews websocket → tagger → broadcast
-  - agent dispatch: news → tag-filter → chunked parallel Modal RPCs → decisions
+  - agent dispatch: news → tag-filter → parallel Groq evals → decisions
   - (future) executor: decision queue → proprietary trade API
   - (future) monitor: position tracking + exit logic
 
 Usage:
     cd server
-    python main.py                # live: DBNews + Modal (NLI, direct dispatch)
-    python main.py --mock         # mock: fake headlines + fake agents (no Modal)
-    python main.py --local        # live: DBNews + local ONNX inference (no Modal)
-    python main.py --mock --local # mock + local inference
+    python main.py                # live: DBNews + Groq via Modal
+    python main.py --local        # live: DBNews + Groq locally (requires GROQ_API_KEY)
+    python main.py --mock         # mock: fake headlines + fake agents
+    python main.py --mock --local # mock headlines + Groq locally
 """
 from __future__ import annotations
 
@@ -36,29 +36,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger("trademaxxer")
 
-BATCH_SIZE = 50
-
-_fast_agent = None
-_local_agent = None
+_groq_client = None
+_modal_agent = None
 
 
-def _get_fast_agent():
-    """Lazy-init the FastMarketAgent Modal handle (singleton)."""
-    global _fast_agent
-    if _fast_agent is None:
+def _get_groq_client():
+    """Lazy-init the local Groq API client (singleton)."""
+    global _groq_client
+    if _groq_client is None:
+        from agents.groq_client import GroqClient
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "GROQ_API_KEY environment variable is required for --local mode"
+            )
+        _groq_client = GroqClient(api_key=api_key)
+    return _groq_client
+
+
+def _get_modal_agent():
+    """Lazy-init the Modal MarketAgent handle (singleton)."""
+    global _modal_agent
+    if _modal_agent is None:
         import modal
-        Cls = modal.Cls.from_name("trademaxxer-agents-fast", "FastMarketAgent")
-        _fast_agent = Cls()
-    return _fast_agent
-
-
-def _get_local_agent():
-    """Lazy-init the local ONNX NLI agent (singleton)."""
-    global _local_agent
-    if _local_agent is None:
-        from agents.local_inference import LocalNLIAgent
-        _local_agent = LocalNLIAgent()
-    return _local_agent
+        Cls = modal.Cls.from_name("trademaxxer-agents", "MarketAgent")
+        _modal_agent = Cls()
+    return _modal_agent
 
 
 async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
@@ -88,7 +91,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     from agents.schemas import MarketConfig, StoryPayload
     from market_registry.kalshi import KalshiMarketRegistry
 
-    # Fetch live markets from Kalshi (no fallback to test markets)
     logger.info("Fetching live markets from Kalshi...")
     markets = []
 
@@ -98,7 +100,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
         if live_markets:
             logger.info(f"Loaded {len(live_markets)} markets from Kalshi")
-            for i, market in enumerate(live_markets[:3]):  # Show first 3
+            for i, market in enumerate(live_markets[:3]):
                 logger.info(f"  {i+1}. {market.address}: {market.question[:60]}...")
             markets = live_markets
         else:
@@ -159,7 +161,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         if news.pre_tagged_tickers:
             ticker_str = f" | {', '.join(news.pre_tagged_tickers)}"
 
-        # Only log important news to reduce terminal spam
         if "HOT" in news.urgency_tags or news.is_priority:
             logger.info(f"{tag_str}{news.headline[:60]}...")
 
@@ -169,7 +170,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         except Exception as e:
             logger.error(f"Tagger failed: {e}", extra={"news_id": news.id})
 
-        # Fire-and-forget dashboard broadcast
         asyncio.create_task(ws_server.broadcast(news, tagged))
 
         story = StoryPayload(
@@ -186,9 +186,9 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
                 if market.address in enabled_markets:
                     asyncio.create_task(_mock_eval_and_broadcast(story, market))
         elif enabled_markets:
-            asyncio.create_task(_nli_eval_and_broadcast(story))
+            asyncio.create_task(_eval_and_broadcast(story))
 
-    # ── Mock agent evaluator (inline, no Modal) ───────────────────
+    # ── Mock agent evaluator (inline, no Groq) ────────────────────
 
     async def _mock_eval_and_broadcast(story: StoryPayload, market: MarketConfig) -> None:
         from mock_feed import mock_evaluate
@@ -199,7 +199,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
             logger.error(f"Mock eval failed: {e}")
             return
 
-        # Only log high-confidence decisions to reduce spam
         if decision.confidence > 0.7 or decision.action != "SKIP":
             logger.info(f"[{decision.action}] {market.address[:8]}… conf={decision.confidence:.1f}")
         payload = decision.to_dict()
@@ -207,99 +206,117 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         payload["market_question"] = market.question
         asyncio.create_task(ws_server.broadcast_decision(payload))
 
-    # ── NLI direct dispatch (tag-filter → chunk → parallel eval) ──
+    # ── Groq dispatch (tag-filter → parallel evals) ───────────────
 
-    async def _nli_eval_and_broadcast(story: StoryPayload) -> None:
-        """Tag-filter enabled markets, chunk into batches, evaluate (Modal or local)."""
+    def _match_markets(story: StoryPayload) -> list[MarketConfig]:
+        """Return enabled markets whose tags overlap with the story."""
         story_tags = set(story.tags)
         if story_tags:
-            matching = [
+            return [
                 m for m in markets
                 if m.address in enabled_markets and story_tags & set(m.tags)
             ]
-        else:
-            matching = [
-                m for m in markets
-                if m.address in enabled_markets
-            ]
+        return [m for m in markets if m.address in enabled_markets]
+
+    async def _eval_and_broadcast(story: StoryPayload) -> None:
+        """Tag-filter enabled markets, fan-out Groq evals, broadcast results."""
+        matching = _match_markets(story)
         if not matching:
             return
 
-        chunks = [matching[i:i + BATCH_SIZE] for i in range(0, len(matching), BATCH_SIZE)]
-
-        def _build_batch(markets_chunk):
-            return [
-                {
-                    "headline": story.headline,
-                    "question": m.question,
-                    "probability": m.current_probability,
-                    "market_address": m.address,
-                    "story_id": story.id,
-                }
-                for m in markets_chunk
-            ]
-
         t0 = time.monotonic()
-        try:
-            if use_local:
-                agent = _get_local_agent()
-                chunk_results = await asyncio.gather(
-                    *[asyncio.to_thread(agent.evaluate_batch, _build_batch(c))
-                      for c in chunks]
-                )
-            else:
-                agent = _get_fast_agent()
-                chunk_results = await asyncio.gather(
-                    *[agent.evaluate_batch.remote.aio(_build_batch(c))
-                      for c in chunks]
-                )
-        except Exception as e:
-            logger.error(f"NLI batch eval failed: {e}")
-            return
+
+        if use_local:
+            results = await _eval_local(story, matching)
+        else:
+            results = await _eval_modal(story, matching)
+
         eval_ms = (time.monotonic() - t0) * 1000
 
-        mode_tag = "local" if use_local else "modal"
-        for results in chunk_results:
-            for result in results:
-                result["latency_ms"] = round(eval_ms, 1)
-                result["headline"] = story.headline
-                mkt = market_by_addr.get(result["market_address"])
-                if mkt:
-                    result["market_question"] = mkt.question
-                action = result["action"]
-                conf = result["confidence"]
-                addr = result["market_address"][:16]
-                # Only log interesting decisions to reduce spam
-                if conf > 0.7 or action != "SKIP":
-                    logger.info(f"[{action}] {addr[:8]}… conf={conf:.1f}")
-                asyncio.create_task(ws_server.broadcast_decision(result))
+        for payload in results:
+            payload["headline"] = story.headline
+            mkt = market_by_addr.get(payload["market_address"])
+            if mkt:
+                payload["market_question"] = mkt.question
+            action = payload["action"]
+            theo = payload.get("theo")
+            if action != "SKIP":
+                theo_str = f" theo={theo:.0%}" if theo is not None else ""
+                logger.info(
+                    f"[{action}] {payload['market_address'][:8]}…"
+                    f"{theo_str} {eval_ms:.0f}ms"
+                )
+            asyncio.create_task(ws_server.broadcast_decision(payload))
+
+    async def _eval_local(story: StoryPayload, matching: list[MarketConfig]) -> list[dict]:
+        """Call Groq API directly from this process."""
+        from agents.agent_logic import evaluate as groq_evaluate
+
+        groq = _get_groq_client()
+
+        async def _one(market: MarketConfig) -> dict | None:
+            try:
+                decision = await groq_evaluate(story, market, groq)
+                return decision.to_dict()
+            except Exception as e:
+                logger.warning(f"Groq eval failed for {market.address[:8]}…: {e}")
+                return None
+
+        raw = await asyncio.gather(*[_one(m) for m in matching])
+        return [r for r in raw if r is not None]
+
+    async def _eval_modal(story: StoryPayload, matching: list[MarketConfig]) -> list[dict]:
+        """Fan-out evals to Modal containers (Groq calls happen server-side)."""
+        agent = _get_modal_agent()
+        story_dict = story.to_dict()
+
+        async def _one(market: MarketConfig) -> dict | None:
+            try:
+                return await agent.evaluate.remote.aio(story_dict, market.to_dict())
+            except Exception as e:
+                logger.warning(f"Modal eval failed for {market.address[:8]}…: {e}")
+                return None
+
+        raw = await asyncio.gather(*[_one(m) for m in matching])
+        return [r for r in raw if r is not None]
 
     # ── Agent warm-up ─────────────────────────────────────────────
 
     async def _warmup_agent() -> None:
-        dummy_batch = [{
-            "headline": "warmup ping — ignore",
-            "question": markets[0].question if markets else "Dummy question",
-            "probability": 0.5,
-            "market_address": "warmup",
-            "story_id": "warmup",
-        }]
+        dummy_market = MarketConfig(
+            address="warmup",
+            question=markets[0].question if markets else "Will it rain tomorrow?",
+            current_probability=0.5,
+            tags=("warmup",),
+        )
+        dummy_story = StoryPayload(
+            id="warmup",
+            headline="warmup ping — ignore",
+            body="",
+            tags=("warmup",),
+            source="warmup",
+            timestamp=datetime.now(timezone.utc),
+        )
+
         if use_local:
-            logger.info("Loading local ONNX NLI model...")
+            logger.info("Warming up Groq client (local)...")
             try:
-                agent = _get_local_agent()
+                from agents.agent_logic import evaluate as groq_evaluate
+                groq = _get_groq_client()
                 t0 = time.monotonic()
-                await asyncio.to_thread(agent.evaluate_batch, dummy_batch)
+                await groq_evaluate(dummy_story, dummy_market, groq)
                 warmup_ms = (time.monotonic() - t0) * 1000
-                logger.info(f"Local ONNX warm-up complete — {warmup_ms:.0f}ms (model loaded)")
+                logger.info(f"Groq warm-up complete — {warmup_ms:.0f}ms")
             except Exception as e:
-                logger.warning(f"Local ONNX warm-up failed (non-fatal): {e}")
+                logger.warning(f"Groq warm-up failed (non-fatal): {e}")
         else:
-            logger.info("Warming up Modal container (ONNX NLI agent)...")
+            logger.info("Warming up Modal container (Groq agent)...")
             try:
-                agent = _get_fast_agent()
+                agent = _get_modal_agent()
                 t0 = time.monotonic()
-                await agent.evaluate_batch.remote.aio(dummy_batch)
+                await agent.evaluate.remote.aio(
+                    dummy_story.to_dict(), dummy_market.to_dict()
+                )
                 warmup_ms = (time.monotonic() - t0) * 1000
                 logger.info(f"Modal warm-up complete — {warmup_ms:.0f}ms (container is hot)")
             except Exception as e:
@@ -314,7 +331,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     # ── Start services ─────────────────────────────────────────────
     logger.info("Starting trademaxxer server")
 
-    # Set welcome message with markets data BEFORE starting server
     ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
 
     await ws_server.start()
@@ -326,11 +342,12 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     mock_task: asyncio.Task | None = None
 
     if use_mock and not use_local:
-        logger.info("Mock mode — agents run inline (no Modal)")
+        logger.info("Mock mode — agents run inline (no Groq)")
     else:
         await _warmup_agent()
 
-    infer_mode = "local ONNX" if use_local else "Modal RPC"
+    infer_mode = "Groq local" if use_local else "Groq via Modal"
+
     if use_mock:
         from mock_feed import run_mock_feed
 
@@ -340,7 +357,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         logger.info(f"Mock news feed started — inference via {infer_mode}")
     else:
         await dbnews_client.connect()
-        logger.info(f"Connected to DBNews feed — NLI pipeline is live ({infer_mode})")
+        logger.info(f"Connected to DBNews feed — pipeline is live ({infer_mode})")
 
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
@@ -381,6 +398,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="trademaxxer server")
     parser.add_argument("--mock", action="store_true", help="Use mock news feed instead of DBNews")
-    parser.add_argument("--local", action="store_true", help="Run ONNX NLI locally instead of Modal RPC")
+    parser.add_argument("--local", action="store_true", help="Call Groq API locally instead of via Modal")
     args = parser.parse_args()
     asyncio.run(run(use_mock=args.mock, use_local=args.local))
