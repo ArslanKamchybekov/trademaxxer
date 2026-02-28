@@ -28,14 +28,29 @@ REDIS_URL=redis://localhost:6379/0
 DBNEWS_WS_URL=wss://...
 ```
 
-### 2. Frontend
+### 2. Modal setup (only needed for live mode)
+
+```bash
+pip install modal
+modal setup          # opens browser to authenticate your Modal account
+```
+
+Then store your Groq API key as a Modal secret — the deployed agent containers read it from there, not from `.env`:
+
+```bash
+modal secret create groq-api-key GROQ_API_KEY=gsk_...
+```
+
+This creates a secret called `groq-api-key` in your Modal workspace that the `MarketAgent` class references via `modal.Secret.from_name("groq-api-key")`.
+
+### 3. Frontend
 
 ```bash
 cd client/client
 npm install
 ```
 
-### 3. Run
+### 4. Run
 
 **Mock mode** — no external services needed, generates fake news + fake agent decisions:
 
@@ -55,7 +70,7 @@ Open `http://localhost:5173` — the Bloomberg Terminal dashboard will start pop
 # Terminal 0: Redis
 redis-server
 
-# Terminal 1: deploy Modal agents (one-time)
+# Terminal 1: deploy Modal agents (one-time, re-run after code changes)
 cd server && modal deploy agents/modal_app.py
 
 # Terminal 2: backend
@@ -63,6 +78,22 @@ cd server && python3 main.py
 
 # Terminal 3: frontend
 cd client/client && npm run dev
+```
+
+To verify Modal is working before starting the full pipeline:
+
+```bash
+# Quick smoke test — should print a Decision dict
+cd server && python3 -c "
+import modal, asyncio
+AgentCls = modal.Cls.from_name('trademaxxer-agents', 'MarketAgent')
+agent = AgentCls()
+result = asyncio.run(agent.evaluate.remote.aio(
+    {'id': 'test', 'headline': 'Test headline', 'body': '', 'tags': ['test'], 'source': 'test', 'timestamp': '2026-01-01T00:00:00+00:00'},
+    {'address': 'TestAddr', 'question': 'Test?', 'current_probability': 0.5, 'tags': ['test'], 'expires_at': None}
+))
+print(result)
+"
 ```
 
 ## Architecture
