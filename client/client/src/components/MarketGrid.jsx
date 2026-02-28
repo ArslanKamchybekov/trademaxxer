@@ -1,3 +1,5 @@
+import { useState, useEffect } from "react"
+
 const ACTION_COLOR = {
   YES: "text-yes",
   NO: "text-no",
@@ -65,21 +67,83 @@ function AgentToggle({ enabled, onClick }) {
 }
 
 export default function MarketGrid({ markets, marketStats, enabledMarkets, onToggle }) {
-  const enabledCount = markets.filter((m) => enabledMarkets?.has(m.address)).length
+  const [selectedTags, setSelectedTags] = useState(new Set())
+
+  // Load saved tag preferences from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('marketTagFilters')
+    if (saved) {
+      try {
+        const tags = JSON.parse(saved)
+        setSelectedTags(new Set(tags))
+      } catch (e) {
+        // Invalid JSON, ignore
+      }
+    }
+  }, [])
+
+  // Save tag preferences to localStorage
+  useEffect(() => {
+    localStorage.setItem('marketTagFilters', JSON.stringify([...selectedTags]))
+  }, [selectedTags])
+
+  // Get all unique tags from markets
+  const allTags = [...new Set(markets.flatMap(m => m.tags || []))].sort()
+
+  // Filter markets by selected tags
+  const filteredMarkets = selectedTags.size === 0
+    ? markets
+    : markets.filter(m => m.tags?.some(tag => selectedTags.has(tag)))
+
+  const enabledCount = filteredMarkets.filter((m) => enabledMarkets?.has(m.address)).length
+
+  const toggleTag = (tag) => {
+    setSelectedTags(prev => {
+      const next = new Set(prev)
+      if (next.has(tag)) {
+        next.delete(tag)
+      } else {
+        next.add(tag)
+      }
+      return next
+    })
+  }
+
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-2 py-1 flex items-center justify-between">
-        <div>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
-            Markets
-          </span>
-          <span className="ml-2 tabular text-[10px] text-muted-foreground">
-            {enabledCount}/{markets.length} armed
+      <div className="border-b border-border px-2 py-1">
+        <div className="flex items-center justify-between mb-1">
+          <div>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
+              Markets
+            </span>
+            <span className="ml-2 tabular text-[10px] text-muted-foreground">
+              {enabledCount}/{filteredMarkets.length} armed
+            </span>
+          </div>
+          <span className="text-[8px] uppercase tracking-wider text-muted-foreground">
+            Agent
           </span>
         </div>
-        <span className="text-[8px] uppercase tracking-wider text-muted-foreground">
-          Agent
-        </span>
+
+        {/* Tag filters */}
+        {allTags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {allTags.map(tag => (
+              <button
+                key={tag}
+                onClick={() => toggleTag(tag)}
+                className={`px-1.5 py-0.5 text-[8px] uppercase tracking-wide transition-colors ${
+                  selectedTags.has(tag)
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-accent'
+                }`}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         <table className="w-full text-[10px]">
@@ -98,7 +162,7 @@ export default function MarketGrid({ markets, marketStats, enabledMarkets, onTog
             </tr>
           </thead>
           <tbody>
-            {markets.map((m) => {
+            {filteredMarkets.map((m) => {
               const enabled = enabledMarkets?.has(m.address) ?? true
               const s = marketStats[m.address] || {
                 yes: 0, no: 0, skip: 0, lastAction: null,

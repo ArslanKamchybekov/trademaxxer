@@ -9,6 +9,28 @@ const MAX_THROUGHPUT_POINTS = 120
 const MAX_VELOCITY_POINTS = 60
 const THROUGHPUT_INTERVAL_MS = 1000
 
+// Simple English language detection - checks for common English words and patterns
+const isEnglish = (text) => {
+  if (!text) return false
+
+  const englishWords = [
+    'the', 'and', 'or', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
+    'can', 'may', 'might', 'must', 'shall', 'to', 'of', 'in', 'on', 'at', 'by',
+    'for', 'with', 'without', 'from', 'as', 'than', 'that', 'this', 'these',
+    'those', 'it', 'its', 'he', 'she', 'his', 'her', 'him', 'them', 'they'
+  ]
+
+  const words = text.toLowerCase().split(/\s+/)
+  const englishWordCount = words.filter(word =>
+    englishWords.includes(word.replace(/[^\w]/g, ''))
+  ).length
+
+  // Consider it English if at least 20% of words are common English words
+  // and there are at least 3 words total
+  return words.length >= 3 && (englishWordCount / words.length) >= 0.2
+}
+
 export default function useWebSocket() {
   const [status, setStatus] = useState("DISCONNECTED")
   const [news, setNews] = useState([])
@@ -33,6 +55,7 @@ export default function useWebSocket() {
   const [tagStats, setTagStats] = useState({})
   const [sessionStart] = useState(Date.now())
   const [enabledMarkets, setEnabledMarkets] = useState(new Set())
+  const [markets, setMarkets] = useState([])
 
   const ws = useRef(null)
   const seqRef = useRef(0)
@@ -72,9 +95,24 @@ export default function useWebSocket() {
   }, [])
 
   const handleNews = useCallback((item) => {
-    item._seq = ++seqRef.current
-    item._ts = Date.now()
-    setNews((prev) => [item, ...prev.slice(0, MAX_NEWS - 1)])
+    // Filter out non-English news
+    if (!isEnglish(item.headline)) {
+      return // Skip non-English news
+    }
+
+    // Prevent duplicate news items using id
+    setNews((prev) => {
+      // Check if item already exists
+      if (prev.some(existingItem => existingItem.id === item.id)) {
+        return prev // Don't add duplicate
+      }
+
+      // Add new item
+      item._seq = ++seqRef.current
+      item._ts = Date.now()
+      return [item, ...prev.slice(0, MAX_NEWS - 1)]
+    })
+
     setStats((prev) => ({ ...prev, events: prev.events + 1 }))
     throughputCounter.current.events++
 
@@ -191,8 +229,10 @@ export default function useWebSocket() {
           if (msg.type === "news") handleNews(msg.data)
           else if (msg.type === "decision") handleDecision(msg.data)
           else if (msg.type === "connected" && msg.markets_state) {
+            setMarkets(msg.markets_state.markets || [])
             setEnabledMarkets(new Set(msg.markets_state.enabled || []))
           } else if (msg.type === "markets_state" && msg.data) {
+            setMarkets(msg.data.markets || [])
             setEnabledMarkets(new Set(msg.data.enabled || []))
           }
         } catch {}
@@ -217,6 +257,6 @@ export default function useWebSocket() {
     status, news, decisions,
     latencyData, throughputData, velocityData,
     stats, marketStats, tagStats, sessionStart,
-    enabledMarkets, toggleMarket,
+    enabledMarkets, toggleMarket, markets,
   }
 }

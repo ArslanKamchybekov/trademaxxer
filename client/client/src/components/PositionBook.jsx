@@ -33,8 +33,14 @@ function MicroSparkline({ values, color }) {
 }
 
 export default function PositionBook({ markets, marketStats }) {
+  // Filter to only show markets where we actually have positions (decisions made)
+  const marketsWithPositions = markets.filter(m => {
+    const s = marketStats[m.address]
+    return s && (s.yes > 0 || s.no > 0) // Only show if we have YES or NO positions
+  })
+
   let totalPnl = 0
-  for (const m of markets) {
+  for (const m of marketsWithPositions) {
     const s = marketStats[m.address]
     if (s) totalPnl += s.pnl
   }
@@ -64,7 +70,13 @@ export default function PositionBook({ markets, marketStats }) {
             </tr>
           </thead>
           <tbody>
-            {markets.map((m) => {
+            {marketsWithPositions.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="px-1.5 py-4 text-center text-muted-foreground text-[10px]">
+                  No positions yet
+                </td>
+              </tr>
+            ) : marketsWithPositions.map((m) => {
               const s = marketStats[m.address] || {
                 yes: 0, no: 0, skip: 0, avgConf: 0, pnl: 0,
                 confidences: [], latencies: [], lastAction: null,

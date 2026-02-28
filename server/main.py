@@ -86,92 +86,40 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
     # ── Markets ────────────────────────────────────────────────────
     from agents.schemas import MarketConfig, StoryPayload
+    from market_registry.kalshi import KalshiMarketRegistry
 
-    test_markets = [
-        MarketConfig(
-            address="FakeContract1111111111111111111111111111111",
-            question="Will the US engage in direct military conflict with Iran before April 2026?",
-            current_probability=0.38,
-            tags=("geopolitics", "politics"),
-        ),
-        MarketConfig(
-            address="FakeContract2222222222222222222222222222222",
-            question="Will oil prices exceed $120/barrel before June 2026?",
-            current_probability=0.55,
-            tags=("geopolitics", "commodities", "macro"),
-        ),
-        MarketConfig(
-            address="FakeContract3333333333333333333333333333333",
-            question="Will the Federal Reserve cut interest rates before July 2026?",
-            current_probability=0.42,
-            tags=("macro", "economic_data"),
-        ),
-        MarketConfig(
-            address="FakeContract4444444444444444444444444444444",
-            question="Will Bitcoin exceed $150k before September 2026?",
-            current_probability=0.31,
-            tags=("crypto",),
-        ),
-        MarketConfig(
-            address="FakeContract5555555555555555555555555555555",
-            question="Will Ethereum flip Bitcoin in market cap before 2027?",
-            current_probability=0.08,
-            tags=("crypto",),
-        ),
-        MarketConfig(
-            address="FakeContract6666666666666666666666666666666",
-            question="Will China invade Taiwan before January 2027?",
-            current_probability=0.12,
-            tags=("geopolitics", "politics"),
-        ),
-        MarketConfig(
-            address="FakeContract7777777777777777777777777777777",
-            question="Will US unemployment exceed 5% before October 2026?",
-            current_probability=0.24,
-            tags=("macro", "economic_data"),
-        ),
-        MarketConfig(
-            address="FakeContract8888888888888888888888888888888",
-            question="Will gold exceed $3500/oz before August 2026?",
-            current_probability=0.47,
-            tags=("commodities", "macro"),
-        ),
-        MarketConfig(
-            address="FakeContract9999999999999999999999999999999",
-            question="Will the EU impose new sanctions on Russia before May 2026?",
-            current_probability=0.72,
-            tags=("geopolitics", "politics"),
-        ),
-        MarketConfig(
-            address="FakeContractAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            question="Will the S&P 500 hit a new all-time high before July 2026?",
-            current_probability=0.61,
-            tags=("macro", "economic_data"),
-        ),
-        MarketConfig(
-            address="FakeContractBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-            question="Will a major US bank fail before December 2026?",
-            current_probability=0.05,
-            tags=("macro", "economic_data"),
-        ),
-        MarketConfig(
-            address="FakeContractCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
-            question="Will natural gas prices exceed $5/MMBtu before winter 2026?",
-            current_probability=0.33,
-            tags=("commodities", "macro"),
-        ),
-    ]
+    # Fetch live markets from Kalshi (no fallback to test markets)
+    logger.info("Fetching live markets from Kalshi...")
+    markets = []
 
-    market_by_addr = {m.address: m for m in test_markets}
+    try:
+        async with KalshiMarketRegistry() as registry:
+            live_markets = await registry.fetch_active_markets()
+
+        if live_markets:
+            logger.info(f"Loaded {len(live_markets)} markets from Kalshi")
+            for i, market in enumerate(live_markets[:3]):  # Show first 3
+                logger.info(f"  {i+1}. {market.address}: {market.question[:60]}...")
+            markets = live_markets
+        else:
+            logger.warning("No suitable markets found from Kalshi after filtering")
+            logger.info("Server will run without markets - check filtering criteria")
+    except Exception as e:
+        logger.error(f"Failed to load markets from Kalshi: {e}")
+        logger.warning("Server will run without markets - check API connectivity")
+
+    market_by_addr = {m.address: m for m in markets}
 
     # ── Market state (all OFF by default — user enables via UI) ──
     enabled_markets: set[str] = set()
 
     def _markets_state_payload() -> dict:
-        return {
-            "markets": [m.to_dict() for m in test_markets],
+        payload = {
+            "markets": [m.to_dict() for m in markets],
             "enabled": list(enabled_markets),
         }
+        logger.info(f"Markets state payload: {len(payload['markets'])} markets, {len(payload['enabled'])} enabled")
+        return payload
 
     async def _handle_command(data: dict) -> None:
         address = data.get("address", "")
@@ -211,7 +159,9 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         if news.pre_tagged_tickers:
             ticker_str = f" | {', '.join(news.pre_tagged_tickers)}"
 
-        logger.info(f"{tag_str}{news.headline[:120]}{ticker_str}")
+        # Only log important news to reduce terminal spam
+        if "HOT" in news.urgency_tags or news.is_priority:
+            logger.info(f"{tag_str}{news.headline[:60]}...")
 
         tagged = None
         try:
@@ -232,7 +182,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         )
 
         if use_mock and not use_local:
-            for market in test_markets:
+            for market in markets:
                 if market.address in enabled_markets:
                     asyncio.create_task(_mock_eval_and_broadcast(story, market))
         elif enabled_markets:
@@ -249,11 +199,9 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
             logger.error(f"Mock eval failed: {e}")
             return
 
-        logger.info(
-            f"[{decision.action}] {market.address[:16]}… "
-            f"conf={decision.confidence:.2f} ({decision.latency_ms:.0f}ms) "
-            f"| {story.headline[:60]}"
-        )
+        # Only log high-confidence decisions to reduce spam
+        if decision.confidence > 0.7 or decision.action != "SKIP":
+            logger.info(f"[{decision.action}] {market.address[:8]}… conf={decision.confidence:.1f}")
         payload = decision.to_dict()
         payload["headline"] = story.headline
         payload["market_question"] = market.question
@@ -266,12 +214,12 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         story_tags = set(story.tags)
         if story_tags:
             matching = [
-                m for m in test_markets
+                m for m in markets
                 if m.address in enabled_markets and story_tags & set(m.tags)
             ]
         else:
             matching = [
-                m for m in test_markets
+                m for m in markets
                 if m.address in enabled_markets
             ]
         if not matching:
@@ -321,10 +269,9 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
                 action = result["action"]
                 conf = result["confidence"]
                 addr = result["market_address"][:16]
-                logger.info(
-                    f"[{action}] {addr}… conf={conf:.2f} ({eval_ms:.0f}ms {mode_tag}) "
-                    f"| {story.headline[:60]}"
-                )
+                # Only log interesting decisions to reduce spam
+                if conf > 0.7 or action != "SKIP":
+                    logger.info(f"[{action}] {addr[:8]}… conf={conf:.1f}")
                 asyncio.create_task(ws_server.broadcast_decision(result))
 
     # ── Agent warm-up ─────────────────────────────────────────────
@@ -332,7 +279,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     async def _warmup_agent() -> None:
         dummy_batch = [{
             "headline": "warmup ping — ignore",
-            "question": test_markets[0].question,
+            "question": markets[0].question if markets else "Dummy question",
             "probability": 0.5,
             "market_address": "warmup",
             "story_id": "warmup",
@@ -366,6 +313,10 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
     # ── Start services ─────────────────────────────────────────────
     logger.info("Starting trademaxxer server")
+
+    # Set welcome message with markets data BEFORE starting server
+    ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
+
     await ws_server.start()
     logger.info(
         f"WebSocket server listening on "
@@ -378,8 +329,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         logger.info("Mock mode — agents run inline (no Modal)")
     else:
         await _warmup_agent()
-
-    ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
 
     infer_mode = "local ONNX" if use_local else "Modal RPC"
     if use_mock:
