@@ -1,0 +1,2 @@
+# pub_sub_feed dependencies
+redis[asyncio]>=5.0
