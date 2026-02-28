@@ -1,0 +1,26 @@
+# News Streamer Service Dependencies
+
+# WebSocket client
+websockets>=12.0
+
+# ClickHouse client
+clickhouse-connect>=0.7.0
+
+# PostgreSQL async client (for TagRules)
+asyncpg>=0.29.0
+
+# FastAPI for REST API and WebSocket server
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# HTTP client for REST API calls
+httpx>=0.26.0
+
+# JWT authentication
+PyJWT>=2.8.0
+
+# Sentiment analysis (VADER + financial domain)
+vaderSentiment>=3.3.2
+
+# Environment variable loading (optional, for local dev)
+python-dotenv>=1.0.0
