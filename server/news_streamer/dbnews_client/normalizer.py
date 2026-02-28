@@ -200,6 +200,14 @@ def validate_dbnews_message(raw: dict[str, Any]) -> None:
         )
 
 
+def _is_english(text: str, threshold: float = 0.6) -> bool:
+    """Fast heuristic: English text is mostly Latin characters + common punctuation."""
+    if not text:
+        return False
+    latin_count = sum(1 for c in text if c.isascii())
+    return (latin_count / len(text)) >= threshold
+
+
 def normalize_news(raw: dict[str, Any]) -> RawNewsItem:
     """
     Transform single DBNews message to RawNewsItem.
@@ -211,10 +219,15 @@ def normalize_news(raw: dict[str, Any]) -> RawNewsItem:
         Normalized RawNewsItem
 
     Raises:
-        ValidationError: If message is invalid
+        ValidationError: If message is invalid or non-English
     """
     # Validate first
     validate_dbnews_message(raw)
+
+    # Drop non-English stories early
+    text_sample = raw.get("text", "")
+    if not _is_english(text_sample):
+        raise ValidationError("Non-English content", field="text")
 
     # Parse timestamp
     timestamp = parse_timestamp(raw["ts"])

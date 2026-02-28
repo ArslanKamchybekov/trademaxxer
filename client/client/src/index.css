@@ -1,68 +1,59 @@
-:root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+@import "tailwindcss";
 
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+@custom-variant dark (&:is(.dark *));
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+@theme {
+  --color-background: oklch(0.12 0.01 260);
+  --color-foreground: oklch(0.95 0.01 260);
+  --color-card: oklch(0.15 0.01 260);
+  --color-card-foreground: oklch(0.95 0.01 260);
+  --color-popover: oklch(0.15 0.01 260);
+  --color-popover-foreground: oklch(0.95 0.01 260);
+  --color-primary: oklch(0.65 0.18 260);
+  --color-primary-foreground: oklch(0.98 0.01 260);
+  --color-secondary: oklch(0.22 0.01 260);
+  --color-secondary-foreground: oklch(0.95 0.01 260);
+  --color-muted: oklch(0.20 0.01 260);
+  --color-muted-foreground: oklch(0.60 0.01 260);
+  --color-accent: oklch(0.22 0.01 260);
+  --color-accent-foreground: oklch(0.95 0.01 260);
+  --color-destructive: oklch(0.55 0.20 25);
+  --color-destructive-foreground: oklch(0.98 0.01 260);
+  --color-border: oklch(0.25 0.01 260);
+  --color-input: oklch(0.25 0.01 260);
+  --color-ring: oklch(0.65 0.18 260);
+
+  --color-bullish: oklch(0.70 0.17 155);
+  --color-bearish: oklch(0.60 0.20 25);
+  --color-neutral: oklch(0.55 0.02 260);
+
+  --radius: 0.625rem;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, monospace;
+
+  --animate-slide-in: slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-a:hover {
-  color: #535bf2;
-}
-
-body {
-  margin: 0;
-  display: flex;
-  place-items: center;
-  min-width: 320px;
-  min-height: 100vh;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
-  cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
-}
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color: #213547;
-    background-color: #ffffff;
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
   }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }

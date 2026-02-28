@@ -1,193 +1,161 @@
-import { useState, useEffect, useRef } from 'react'
-import './App.css'
+import { useState, useEffect, useRef } from "react"
+import {
+  Radio,
+  Cpu,
+  Crosshair,
+  BarChart3,
+  Wallet,
+  CircleDot,
+} from "lucide-react"
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
+import { Separator } from "@/components/ui/separator"
+import NewsFeed from "@/components/NewsFeed"
+import StatsBar from "@/components/StatsBar"
+import PlaceholderPanel from "@/components/PlaceholderPanel"
 
-function App() {
+const WS_URL = "ws://localhost:8765"
+
+function ConnectionDot({ status }) {
+  const color = {
+    Connected: "bg-bullish",
+    Connecting: "bg-yellow-400",
+    Disconnected: "bg-bearish",
+    Error: "bg-bearish",
+  }[status] || "bg-muted-foreground"
+
+  return (
+    <span className="relative flex h-2 w-2">
+      {status === "Connected" && (
+        <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-50 ${color}`} />
+      )}
+      <span className={`relative inline-flex h-2 w-2 rounded-full ${color}`} />
+    </span>
+  )
+}
+
+export default function App() {
   const [news, setNews] = useState([])
-  const [connectionStatus, setConnectionStatus] = useState('Connecting...')
+  const [connectionStatus, setConnectionStatus] = useState("Connecting")
   const [stats, setStats] = useState({ total: 0, bullish: 0, bearish: 0, neutral: 0 })
   const ws = useRef(null)
+  const seqRef = useRef(0)
 
   useEffect(() => {
-    // Connect to WebSocket server
-    const connectWebSocket = () => {
-      ws.current = new WebSocket('ws://localhost:8767')
+    const connect = () => {
+      ws.current = new WebSocket(WS_URL)
 
-      ws.current.onopen = () => {
-        setConnectionStatus('Connected')
-        console.log('Connected to news stream')
-      }
+      ws.current.onopen = () => setConnectionStatus("Connected")
 
       ws.current.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data)
+          if (message.type === "news") {
+            const item = message.data
+            item._seq = ++seqRef.current
 
-          if (message.type === 'news') {
-            const newsItem = message.data
-
-            // Add timestamp for display
-            newsItem.displayTime = new Date().toLocaleTimeString()
-
-            // Add to beginning of array (latest first)
-            setNews(prevNews => [newsItem, ...prevNews.slice(0, 49)]) // Keep last 50 items
-
-            // Update stats
-            setStats(prevStats => ({
-              total: prevStats.total + 1,
-              bullish: prevStats.bullish + (newsItem.sentiment === 'bullish' ? 1 : 0),
-              bearish: prevStats.bearish + (newsItem.sentiment === 'bearish' ? 1 : 0),
-              neutral: prevStats.neutral + (newsItem.sentiment === 'neutral' ? 1 : 0),
+            setNews((prev) => [item, ...prev.slice(0, 99)])
+            setStats((prev) => ({
+              total: prev.total + 1,
+              bullish: prev.bullish + (item.sentiment === "bullish" ? 1 : 0),
+              bearish: prev.bearish + (item.sentiment === "bearish" ? 1 : 0),
+              neutral: prev.neutral + (item.sentiment === "neutral" ? 1 : 0),
             }))
-          } else if (message.type === 'connected') {
-            console.log('Welcome message:', message.message)
           }
-        } catch (error) {
-          console.error('Error parsing message:', error)
+        } catch (e) {
+          console.error("Parse error:", e)
         }
       }
 
       ws.current.onclose = () => {
-        setConnectionStatus('Disconnected')
-        console.log('Disconnected from news stream')
-        // Try to reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000)
+        setConnectionStatus("Disconnected")
+        setTimeout(connect, 3000)
       }
 
-      ws.current.onerror = (error) => {
-        setConnectionStatus('Error')
-        console.error('WebSocket error:', error)
-      }
+      ws.current.onerror = () => setConnectionStatus("Error")
     }
 
-    connectWebSocket()
-
-    // Cleanup on unmount
-    return () => {
-      if (ws.current) {
-        ws.current.close()
-      }
-    }
+    connect()
+    return () => ws.current?.close()
   }, [])
 
-  const getSentimentColor = (sentiment) => {
-    switch (sentiment) {
-      case 'bullish': return '#10b981' // green
-      case 'bearish': return '#ef4444' // red
-      case 'neutral': return '#6b7280' // gray
-      default: return '#6b7280'
-    }
-  }
-
-  const getUrgencyIcon = (urgency) => {
-    switch (urgency) {
-      case 'breaking': return '🚨'
-      case 'high': return '⚡'
-      default: return '📰'
-    }
-  }
-
-  const formatTimestamp = (timestamp) => {
-    return new Date(timestamp).toLocaleTimeString()
-  }
-
   return (
-    <div className="app">
-      <header className="header">
-        <h1>📈 Live News Stream</h1>
-        <div className="connection-status" data-status={connectionStatus.toLowerCase()}>
-          <span className="status-dot"></span>
-          {connectionStatus}
+    <div className="flex h-screen flex-col overflow-hidden">
+      {/* ── Top Bar ─────────────────────────────────────────── */}
+      <header className="flex shrink-0 items-center justify-between border-b border-border bg-card/50 px-5 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <CircleDot size={18} className="text-primary" />
+            <span className="text-sm font-semibold tracking-tight">
+              trademaxxer
+            </span>
+          </div>
+          <Separator orientation="vertical" className="!h-4" />
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <ConnectionDot status={connectionStatus} />
+            {connectionStatus}
+          </div>
         </div>
+
+        <StatsBar data={stats} />
       </header>
 
-      <div className="stats">
-        <div className="stat-item">
-          <span className="stat-value">{stats.total}</span>
-          <span className="stat-label">Total</span>
+      {/* ── Main Grid ───────────────────────────────────────── */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* ── News Feed (left, wide) ──────────────────────── */}
+        <div className="flex w-[480px] shrink-0 flex-col border-r border-border">
+          <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+            <Radio size={13} className="text-primary" />
+            <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              Live Feed
+            </span>
+            <span className="ml-auto text-[11px] font-mono text-muted-foreground/60 tabular-nums">
+              {news.length} events
+            </span>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <NewsFeed news={news} />
+          </div>
         </div>
-        <div className="stat-item bullish">
-          <span className="stat-value">{stats.bullish}</span>
-          <span className="stat-label">Bullish</span>
-        </div>
-        <div className="stat-item bearish">
-          <span className="stat-value">{stats.bearish}</span>
-          <span className="stat-label">Bearish</span>
-        </div>
-        <div className="stat-item neutral">
-          <span className="stat-value">{stats.neutral}</span>
-          <span className="stat-label">Neutral</span>
-        </div>
-      </div>
 
-      <div className="news-container">
-        {news.length === 0 ? (
-          <div className="no-news">
-            <p>Waiting for live news...</p>
-            <div className="loading-dots">
-              <span></span>
-              <span></span>
-              <span></span>
+        {/* ── Right panels ────────────────────────────────── */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Top row: Agents + Executor */}
+          <div className="grid flex-1 grid-cols-2 gap-px bg-border">
+            <div className="bg-background p-3">
+              <PlaceholderPanel
+                title="Agents"
+                icon={Cpu}
+                description="Per-market Groq agents will appear here"
+              />
+            </div>
+            <div className="bg-background p-3">
+              <PlaceholderPanel
+                title="Executor"
+                icon={Crosshair}
+                description="Trade execution status will appear here"
+              />
             </div>
           </div>
-        ) : (
-          news.map((item) => (
-            <div key={item.id} className="news-item">
-              <div className="news-header">
-                <span className="urgency-icon">
-                  {getUrgencyIcon(item.urgency)}
-                </span>
-                <span className="news-time">
-                  {formatTimestamp(item.timestamp)}
-                </span>
-                <span
-                  className="sentiment-badge"
-                  style={{ backgroundColor: getSentimentColor(item.sentiment) }}
-                >
-                  {item.sentiment || 'neutral'}
-                </span>
-              </div>
 
-              <h3 className="news-headline">{item.headline}</h3>
-
-              {item.body && (
-                <p className="news-body">{item.body}</p>
-              )}
-
-              <div className="news-meta">
-                <span className="news-source">
-                  📡 {item.sourceHandle} ({item.sourceType})
-                </span>
-
-                {item.tickers && item.tickers.length > 0 && (
-                  <div className="tickers">
-                    {item.tickers.slice(0, 5).map(ticker => (
-                      <span key={ticker} className="ticker">
-                        ${ticker}
-                      </span>
-                    ))}
-                    {item.tickers.length > 5 && (
-                      <span className="ticker-more">
-                        +{item.tickers.length - 5} more
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {item.categories && item.categories.length > 0 && (
-                  <div className="categories">
-                    {item.categories.map(category => (
-                      <span key={category} className="category">
-                        {category}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
+          {/* Bottom row: Positions + PnL */}
+          <div className="grid flex-1 grid-cols-2 gap-px bg-border">
+            <div className="bg-background p-3">
+              <PlaceholderPanel
+                title="Positions"
+                icon={Wallet}
+                description="Open positions & monitoring will appear here"
+              />
             </div>
-          ))
-        )}
+            <div className="bg-background p-3">
+              <PlaceholderPanel
+                title="Performance"
+                icon={BarChart3}
+                description="PnL tracking & metrics will appear here"
+              />
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
 }
-
-export default App
