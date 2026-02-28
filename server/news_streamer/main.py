@@ -33,12 +33,14 @@ async def main() -> None:
     2. Tags news with sentiment and categories
     3. Starts a WebSocket server for frontend clients
     4. Broadcasts tagged news items to all connected clients
+    5. Publishes tagged news items to Redis pub/sub feeds
     """
     from news_streamer.config import settings
     from news_streamer.dbnews_client import DBNewsWebSocketClient
     from news_streamer.models import RawNewsItem
     from news_streamer.ws_server import NewsWebSocketServer
     from news_streamer.tagger import NewsTagger
+    from news_streamer.pubsub import NewsPublisher
 
     logger.info("Starting news streamer with tagging")
 
@@ -51,6 +53,10 @@ async def main() -> None:
 
     # Create tagger (no platform tags needed for streaming)
     tagger = NewsTagger(settings.tagger, platform_tag_loader=None)
+
+    # Create Redis publisher
+    news_publisher = NewsPublisher(settings.redis.url)
+    await news_publisher.connect()
 
     # Message counter for stats
     message_count = 0
@@ -96,13 +102,22 @@ async def main() -> None:
                 extra={"news_id": news.id, "error": str(e)},
             )
 
-        # Broadcast to connected clients (with sentiment if available)
+        # Broadcast to WebSocket clients (this should be removed and we should only broadcast ai output to clients) and publish to Redis feeds
         client_count = await ws_server.broadcast(news, tagged_news)
         if client_count > 0:
             logger.debug(
                 f"Broadcast to {client_count} clients",
                 extra={"news_id": news.id},
             )
+
+        if tagged_news is not None:
+            try:
+                await news_publisher.publish(tagged_news)
+            except Exception as e:
+                logger.error(
+                    f"Failed to publish to Redis: {e}",
+                    extra={"news_id": news.id, "error": str(e)},
+                )
 
     async def handle_error(error: Exception) -> None:
         logger.error(
@@ -145,6 +160,9 @@ async def main() -> None:
 
         # Disconnect from DBNews
         await dbnews_client.disconnect()
+
+        # Close Redis publisher
+        await news_publisher.close()
 
         # Log final stats
         dbnews_stats = dbnews_client.get_stats()
