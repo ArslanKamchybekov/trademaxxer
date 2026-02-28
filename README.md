@@ -95,12 +95,14 @@ print(result)
 ## Architecture
 
 ```
-NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGENTS (NLI) ──→ DASHBOARD
-                                                                             │
-                                                                     (not yet built)
-                                                                             ↓
-                                                                   SOLANA EXECUTOR ──→ POSITION MONITOR
+NEWS FEED ──→ INTAKE / TAGGER ──→ DIRECT DISPATCH ──→ MODAL AGENTS (ONNX NLI) ──→ DASHBOARD
+                                  (tag-filter + batch)     │
+                                                    (not yet built)
+                                                           ↓
+                                                 SOLANA EXECUTOR ──→ POSITION MONITOR
 ```
+
+The hot path is **zero-Redis**: news arrives, gets tagged in-process, filtered against armed markets by tag overlap, chunked into batches of 50, and fired as parallel Modal RPCs. Redis remains in the codebase for future cross-process deployment but is not on the critical latency path.
 
 ### Components
 
@@ -108,9 +110,9 @@ NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGEN
 |---|-----------|-------------|---------|
 | 1 | **News Feed** | WebSocket connection to DBNews provider (~2 stories/sec, spikes during major events). Mock mode generates 100 realistic headlines. | Always-on Python process on VPS |
 | 2 | **Intake Service** | Normalize, tag (sentiment + category + tickers), and broadcast — drops noise in <5ms | Same process as news feed |
-| 3 | **Redis Pub/Sub** | Tag-based fan-out channels (`news:all`, `news:category:macro`, etc.). Each listener subscribes to its market's tags. | Local or Upstash Redis |
-| 4 | **Modal Agents** | One agent per market, subscribes to relevant tags, wakes on matching news, runs NLI model (DeBERTa), scales to zero. Mock mode returns random decisions inline. | Modal (pay per use) |
-| 5 | **Dashboard** | Bloomberg Terminal-style UI with 13 live panels: news wire, decision feed, position book, charts, ticker tape, latency stats | React + Vite (local or Vercel) |
+| 3 | **Direct Dispatch** | Tag-filter enabled markets, chunk into batches of 50, fire parallel `asyncio.gather()` RPCs to Modal. Replaces Redis in the hot path. | Same process |
+| 4 | **Modal Agents (ONNX)** | Batched NLI inference via ONNX Runtime. One RPC evaluates up to 50 markets. Scales horizontally — 5k markets = 100 parallel RPCs, same wall-clock time. | Modal (pay per use) |
+| 5 | **Dashboard** | Bloomberg Terminal-style UI with 13 live panels: news wire, decision feed, position book, charts, ticker tape, latency stats. Includes per-market agent toggle. | React + Vite (local or Vercel) |
 | 6 | **Market Registry** | Tag-indexed market data linking on-chain markets to agent decisions | Planned — currently hardcoded `MarketConfig` |
 | 7 | **Solana Executor** | Reads decisions, fires trades via proprietary API | Not started |
 | 8 | **Position Monitor** | Polls open positions every 30s for resolution, edge compression, contradicting news, time decay | Not started |
@@ -119,14 +121,18 @@ NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGEN
 
 ```
 t=0ms     Reuters fires: "Fed raises rates 50bps surprise"
-t=2ms     Intake dedup + keyword tag → [fed, macro] → published to news:category:macro channel
-t=5ms     4 agents subscribed to [fed] or [macro] wake up in parallel
-t=10ms    Each agent sends headline + market question to Modal NLI model
-t=50ms    NLI model returns entailment/contradiction/neutral → YES/NO/SKIP
-t=55ms    Decisions broadcast to dashboard via WebSocket
-t=60ms    (future) Executor reads decisions, validates positions & market state
-t=800ms   (future) Positions confirmed on-chain, tracked in Redis
+t=2ms     Intake dedup + keyword tag → [fed, macro]
+t=3ms     Tag-filter: 4/12 armed markets match [fed] or [macro]
+t=4ms     Batch: 4 markets chunked into 1 batch (< 50 threshold)
+t=5ms     Single Modal RPC fired (ONNX NLI, evaluate_batch)
+t=40ms    ONNX inference completes (~35ms for batch of 4)
+t=85ms*   RPC returns — 4 decisions with action + confidence
+t=86ms    Decisions broadcast to dashboard (fire-and-forget)
+t=90ms    (future) Executor reads decisions, validates positions
+t=800ms   (future) Positions confirmed on-chain
 t=48hrs   (future) Markets resolve → claim winnings → record PnL
+
+* 85ms assumes co-located VPS. From local Mac: ~140-200ms.
 ```
 
 ## Intake Pipeline
@@ -136,11 +142,11 @@ Every raw story passes through two gates:
 1. **Tagger** — headline scanned for sentiment (VADER), categories (`geopolitics`, `macro`, `crypto`, etc.), and tickers. Categories determine which Redis channels the story publishes to.
 2. **Fan-out** — tagged story broadcast to WebSocket (dashboard) and published to Redis Pub/Sub channels (`news:all` + per-category channels).
 
-## Modal Agents (NLI) — LIVE
+## Modal Agents (ONNX NLI) — LIVE
 
-Every market has its own agent deployed on Modal serverless. Each agent's listener subscribes to the Redis Pub/Sub channels matching its market's tags. When a story arrives on any subscribed channel, the listener calls Modal, which runs a pretrained NLI model and emits a Decision.
+News-to-decision classification runs on Modal as an ONNX Runtime model. No LLM, no API keys, no rate limits. The entire inference stack fits in a ~300MB container image.
 
-**Model:** `cross-encoder/nli-deberta-v3-xsmall` (22M params, CPU inference)
+**Model:** `cross-encoder/nli-deberta-v3-xsmall` (22M params, ONNX Runtime, CPU inference)
 
 Classification is framed as Natural Language Inference:
 - **Premise:** news headline
@@ -149,38 +155,62 @@ Classification is framed as Natural Language Inference:
 
 Confidence is scaled by market probability — signals already priced in get discounted.
 
-**Per-agent flow:**
+**Hot path (direct dispatch):**
 
-1. `AgentListener` subscribes to Redis channels (e.g. `news:all`, `news:category:macro`) via `FeedSubscriber`
-2. Story arrives → deduplication via `seen` set → deserialize to `StoryPayload`
-3. Calls Modal `FastMarketAgent.evaluate_batch()` remotely (or `mock_evaluate()` in mock mode)
-4. Modal container runs NLI inference: tokenize → forward pass → softmax → postprocess
-5. Returns `{"action": "YES"|"NO"|"SKIP", "confidence": 0.0-1.0, "reasoning": "..."}`
-6. Decision broadcast to dashboard via WebSocket `on_decision` callback
-7. Container stays warm for 5min (`scaledown_window=300`), then scales to zero
+1. News arrives → tagger extracts categories in ~5ms
+2. `_nli_eval_and_broadcast()` filters: only armed markets whose tags overlap with story tags
+3. Matching markets chunked into batches of 50
+4. Parallel `asyncio.gather()` fires one Modal RPC per chunk
+5. Modal container runs ONNX inference: tokenize → `session.run()` → softmax → postprocess
+6. Returns `[{"action": "YES"|"NO"|"SKIP", "confidence": 0.0-1.0, "reasoning": "..."}, ...]`
+7. Each decision broadcast to dashboard via fire-and-forget `asyncio.create_task()`
+8. Container stays warm for 5min (`scaledown_window=300`), then scales to zero
 
-**Why NLI over Groq LLM:**
+**Why ONNX NLI over Groq LLM:**
 
-| | Groq (llama-3.1-8b-instant) | NLI (DeBERTa-v3-xsmall) |
+| | Groq (llama-3.1-8b-instant) | ONNX NLI (DeBERTa-v3-xsmall) |
 |---|---|---|
-| Inference | ~250ms | ~10ms |
-| Rate limits | 6000 TPM free tier | None |
-| API dependency | Yes (external) | None (model in container) |
-| Cost per call | Token-based | CPU time only |
-| Batch support | No | Yes (single forward pass) |
+| Inference | ~250ms | **~35ms** (batch of 12) |
+| Rate limits | 6000 TPM free tier | **None** |
+| API dependency | External (Groq) | **None** (model baked in image) |
+| Cost per call | Token-based | **CPU time only** |
+| Batch support | No | **Yes** (single forward pass) |
+| Image size | ~600MB (groq SDK) | **~300MB** (onnxruntime) |
+| Cold start | ~3s | **~1.5s** |
 
-Modal warm-up fires a dummy evaluation at startup to avoid cold starts on the first real trade.
-
-**Scaling:** 0 news → 0 containers → $0. One story matching 4 markets → 4 parallel evaluations. `buffer_containers=1` keeps one pre-warmed.
+**Scaling:** 0 news → 0 containers → $0. One story matching 50 markets → 1 RPC. 5,000 matching markets → 100 parallel RPCs, same wall-clock time. `buffer_containers=1` keeps one pre-warmed.
 
 **Model evolution:**
 
-| Version | Model | Inference | Issue |
-|---------|-------|-----------|-------|
-| v1 (Groq) | llama-3.3-70b-versatile | 311ms | Verbose output, prompt parsing failures |
-| v2 (Groq) | llama-3.3-70b-versatile | ~300ms | Fixed with `_normalize_action()` parser |
-| v3 (Groq) | llama-3.1-8b-instant | 249ms | Rate limited at scale (6000 TPM) |
-| nli-v1 | DeBERTa-v3-xsmall | ~10ms | **Current** — no rate limits, no API keys |
+| Version | Model | Runtime | Inference | Total (warm) | Issue |
+|---------|-------|---------|-----------|-------------|-------|
+| v1 | llama-3.3-70b-versatile | Groq API | 311ms | ~658ms | Verbose output, parsing failures |
+| v2 | llama-3.3-70b-versatile | Groq API | ~300ms | ~600ms | Fixed parser |
+| v3 | llama-3.1-8b-instant | Groq API | 249ms | ~300ms | Rate limited at 6000 TPM |
+| nli-v1 | DeBERTa-v3-xsmall | PyTorch | ~40ms | ~200ms | Large image (1.5GB) |
+| **nli-v2** | DeBERTa-v3-xsmall | **ONNX** | **~35ms** | **~143ms** | **Current** — 300MB image |
+
+## Latency Breakdown
+
+Measured from local Mac (residential internet → Modal cloud):
+
+```
+Stage                    Time        Cumulative
+─────────────────────────────────────────────────
+Tagger (VADER + regex)   ~5ms        5ms
+Tag-filter + chunk       <1ms        6ms
+Modal RPC overhead       ~100ms*     106ms
+ONNX tokenize + infer    ~35ms       141ms
+Postprocess + return     ~2ms        143ms
+WS broadcast             async       (non-blocking)
+─────────────────────────────────────────────────
+Total (local Mac)                    ~143-200ms
+Total (co-located VPS)               ~65-85ms  (projected)
+Total (Modal-hosted)                 ~40ms     (planned)
+
+* RPC overhead = network round-trip + Modal scheduling.
+  From a co-located VPS this drops to ~30-50ms.
+```
 
 ## Mock Mode
 
@@ -278,6 +308,7 @@ trademaxxer/
 │   └── vite.config.js
 ├── start.sh                            # One-command launcher (Redis + server + frontend)
 ├── DEVLOG.md                           # Development log with benchmarks
+├── ARCHITECTURE.md                     # Mermaid diagrams — all system flows
 └── README.md
 ```
 
@@ -335,6 +366,17 @@ Server 4 — Vercel (free)
 - Recharts — chart rendering
 - Tailwind CSS — styling
 
+## Dynamic Market Management
+
+Markets default to **OFF**. The user arms specific markets from the dashboard — only armed markets consume compute.
+
+- **Toggle:** Click the agent toggle in the Markets panel to arm/disarm a market
+- **Server-authoritative:** Backend owns the `enabled_markets` set. UI sends requests, server validates and broadcasts.
+- **Tag-filter:** Armed markets only get evaluated if story tags overlap with market tags.
+- **Visual feedback:** Unarmed markets are dimmed (30% opacity), header shows "X/Y armed".
+
+This is critical for scaling to 5,000+ markets from a real registry. You arm markets you have edge on, not all of them.
+
 ## Current Status
 
 | Component | Status | Notes |
@@ -342,18 +384,20 @@ Server 4 — Vercel (free)
 | News feed (DBNews WS) | **Live** | Streaming real-time, ~2 stories/sec |
 | Mock news feed | **Live** | 100 headlines, `--mock` flag |
 | Intake / tagger | **Live** | Sentiment + category + tickers in <5ms |
-| WS broadcast server | **Live** | News + decisions to dashboard |
-| Redis Pub/Sub | **Live** | Python `pub_sub_feed` library, tag-based channels |
-| Modal agents (NLI) | **Deployed** | DeBERTa-v3-xsmall, ~10ms inference, no rate limits |
+| WS broadcast server | **Live** | News + decisions + market state to dashboard |
+| Direct dispatch | **Live** | Tag-filter → chunk → parallel Modal RPCs |
+| Modal agents (ONNX) | **Deployed** | DeBERTa-v3-xsmall ONNX, ~35ms inference, no rate limits |
+| Dynamic market toggle | **Live** | UI-driven arm/disarm, server-authoritative |
 | Mock agents | **Live** | Random decisions, 150–400ms simulated latency |
-| Agent listeners | **Live** | 1 per market, deduplication, `news:all` fallback |
-| Dashboard | **Live** | Bloomberg Terminal, 13 panels, real-time |
+| Dashboard | **Live** | Bloomberg Terminal, 13 panels, real-time, market toggles |
+| Redis Pub/Sub | Available | Not on hot path — kept for future multi-process mode |
 | Market registry | Planned | Currently hardcoded `MarketConfig` objects |
 | Decision queue | Planned | Decisions go direct to dashboard, no queue yet |
 | Solana executor | Not started | |
 | Position monitor | Not started | |
 
-See [DEVLOG.md](DEVLOG.md) for full development history and benchmarks.
+See [DEVLOG.md](DEVLOG.md) for full development history, benchmarks, and architecture decisions.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for mermaid diagrams of all system flows.
 
 ## License
 
