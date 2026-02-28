@@ -111,7 +111,7 @@ We iterated through 6 model versions to reach current performance:
 | PyTorch → ONNX Runtime | **-10ms** | Dropped autograd, GPU kernels, 1.2GB of torch |
 | Modal RPC → local inference | **-100–260ms** | In-process ONNX call, zero network overhead |
 | Blocking WS → fire-and-forget | **-5ms** | `asyncio.create_task()` for all non-critical I/O |
-| Per-market RPC → batched | **-N×80ms** | One call per 50 markets instead of one per market |
+| Per-market RPC → batched | **cost + variance** | 1 call per 50 markets vs N concurrent RPCs — reduces scheduling contention and container sprawl |
 | Image size: 1.5GB → 300MB | **-1.5s cold** | Faster container provisioning (Modal mode) |
 
 ### Scaling Characteristics

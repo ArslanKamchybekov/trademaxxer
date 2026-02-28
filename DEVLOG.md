@@ -568,7 +568,7 @@ A $5/mo VPS in US-East (same region as Modal's infra) would bring total latency 
 
 2. **Direct dispatch over Redis** — Same-process communication should be in-process. Redis is for cross-process decoupling, not for calling yourself. Saved ~10–15ms per decision.
 
-3. **Chunked parallel batching** — Scales to any number of markets. 12 markets = 1 chunk = 1 RPC. 5,000 markets with 50-overlap = 100 parallel RPCs, same wall-clock time. Modal's auto-scaling handles the containers.
+3. **Chunked parallel batching** — Scales to any number of markets. 12 markets = 1 chunk = 1 RPC. 5,000 markets with 50-overlap = 100 parallel RPCs, same wall-clock time. Note: even the old per-market architecture ran RPCs concurrently, so wall-clock was already ~1 round-trip. The main win from batching is cost efficiency (1 container, 1 forward pass) and reduced scheduling contention, not raw latency.
 
 4. **Fire-and-forget WS broadcasts** — Dashboard updates are cosmetic, not latency-critical. Blocking on them in the hot path was wasting 1–5ms per decision for no reason.
 
