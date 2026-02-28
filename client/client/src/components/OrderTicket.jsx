@@ -136,7 +136,7 @@ export default function OrderTicket({
             {/* Empty State */}
             {tradableMarkets.filter(m => marketStats[m.address]?.lastAction && marketStats[m.address]?.lastAction !== "SKIP").length === 0 && (
               <div className="text-center text-[10px] text-muted-foreground mt-4">
-                <div className="mb-2">🤖 Agents monitoring markets</div>
+                <div className="mb-2">Agents monitoring markets</div>
                 <div>Waiting for trading opportunities...</div>
               </div>
             )}

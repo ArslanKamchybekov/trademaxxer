@@ -115,16 +115,16 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         logger.error(f"Failed to load markets from Kalshi: {e}")
         logger.warning("Server will run without markets - check API connectivity")
 
-    # ── Demo contracts (prepend, auto-enabled) ──────────────────
+    # ── Demo contracts (prepend, all off by default) ─────────────
     from demo_markets import DEMO_CONTRACTS
     demo_addrs = {m.address for m in DEMO_CONTRACTS}
     markets = list(DEMO_CONTRACTS) + [m for m in markets if m.address not in demo_addrs]
-    logger.info(f"Injected {len(DEMO_CONTRACTS)} demo contracts (auto-enabled)")
+    logger.info(f"Injected {len(DEMO_CONTRACTS)} demo contracts (all off)")
 
     market_by_addr = {m.address: m for m in markets}
 
-    # ── Market state (demo ON by default, rest OFF) ───────────────
-    enabled_markets: set[str] = set(demo_addrs)
+    # ── Market state (all OFF by default) ──────────────────────────
+    enabled_markets: set[str] = set()
 
     def _markets_state_payload() -> dict:
         payload = {

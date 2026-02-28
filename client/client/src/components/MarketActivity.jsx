@@ -10,14 +10,16 @@ function ActivityBar({ market, maxEvals }) {
   const pct = maxEvals > 0 ? (market.total / maxEvals) * 100 : 0
   const yesPct = market.total > 0 ? (market.yes / market.total) * 100 : 0
   const noPct = market.total > 0 ? (market.no / market.total) * 100 : 0
-  const addr = market.address.slice(0, 12)
+  const name = market.question
+    ? market.question.replace(/^Will\s+/i, "").replace(/\?$/, "").slice(0, 36) + (market.question.length > 40 ? "…" : "")
+    : market.address.slice(0, 12)
   const lastAction = market.lastAction
 
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center justify-between">
-        <span className="text-[9px] text-foreground/70 truncate max-w-[160px]" title={market.question}>
-          {addr}
+        <span className="text-[9px] text-foreground/70 truncate max-w-[220px]" title={market.question}>
+          {name}
         </span>
         <div className="flex items-center gap-1.5">
           {lastAction && (

@@ -96,15 +96,34 @@ export default function App() {
       {/* Main 3-column layout */}
       <div className="flex flex-1 overflow-hidden">
 
-        {/* ── LEFT COL: News + Market Activity ── */}
+        {/* ── LEFT COL: News + Activity + Charts ── */}
         <div className="flex w-[360px] shrink-0 flex-col border-r border-border">
           {/* News Wire — top */}
           <div className="flex-[3] overflow-hidden border-b border-border">
             <NewsTape news={news} velocityData={velocityData} />
           </div>
-          {/* Market Activity — bottom */}
-          <div className="flex-[2] overflow-hidden">
+          {/* Market Activity — middle */}
+          <div className="flex-[2] overflow-hidden border-b border-border">
             <MarketActivity decisions={decisions} />
+          </div>
+          {/* Charts — bottom 2x2 */}
+          <div className="flex flex-[3] overflow-hidden">
+            <div className="flex flex-1 flex-col">
+              <div className="flex-1 border-b border-r border-border overflow-hidden">
+                <LatencyChart data={latencyData} />
+              </div>
+              <div className="flex-1 border-r border-border overflow-hidden">
+                <ThroughputChart data={throughputData} />
+              </div>
+            </div>
+            <div className="flex flex-1 flex-col">
+              <div className="flex-1 border-b border-border overflow-hidden">
+                <DecisionChart stats={stats} />
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <LatencyStats stats={stats} />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -118,66 +137,61 @@ export default function App() {
               onToggle={toggleMarket}
             />
           </div>
-          <div className="flex-[3] overflow-hidden border-b border-border">
+          <div className="flex-[4] overflow-hidden border-b border-border">
             <PositionBook markets={markets} marketStats={marketStats} allTrades={allTrades} />
           </div>
-          <div className="flex-[2] overflow-hidden">
+          <div className="flex-[1] overflow-hidden">
             <TagHeatmap tagStats={tagStats} />
           </div>
         </div>
 
-        {/* ── RIGHT COL: Decisions + Agent/Trading Panel ────────── */}
+        {/* ── RIGHT COL: Decisions + Trades (top) / Modal (bottom) ── */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex-[3] overflow-hidden border-b border-border">
-            <DecisionFeed decisions={decisions} />
-          </div>
-          <div className="flex-[4] overflow-hidden">
-            <div className="flex h-full">
-              {/* Left side: Agent Panel */}
-              <div className="flex-1 border-r border-border overflow-hidden">
-                <ModalAgentPanel stats={stats} decisions={decisions} enabledCount={enabledMarkets.size} />
-              </div>
-              {/* Right side: Trading Mode Toggle + Order Ticket */}
-              <div className="w-[200px] shrink-0 overflow-hidden">
-                <div className="h-full flex flex-col">
-                  {/* Mode Toggle */}
-                  <div className="border-b border-border px-2 py-1">
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => setTradingMode("agent")}
-                        className={`px-2 py-0.5 text-[8px] uppercase rounded ${
-                          tradingMode === "agent"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground hover:bg-accent"
-                        }`}
-                      >
-                        Agent
-                      </button>
-                      <button
-                        onClick={() => setTradingMode("manual")}
-                        className={`px-2 py-0.5 text-[8px] uppercase rounded ${
-                          tradingMode === "manual"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground hover:bg-accent"
-                        }`}
-                      >
-                        Manual
-                      </button>
-                    </div>
+          {/* Top: Decisions + Order Ticket side by side */}
+          <div className="flex flex-[3] overflow-hidden border-b border-border">
+            <div className="flex-1 border-r border-border overflow-hidden">
+              <DecisionFeed decisions={decisions} />
+            </div>
+            <div className="w-[200px] shrink-0 overflow-hidden">
+              <div className="h-full flex flex-col">
+                <div className="border-b border-border px-2 py-1">
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => setTradingMode("agent")}
+                      className={`px-2 py-0.5 text-[8px] uppercase rounded ${
+                        tradingMode === "agent"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-accent"
+                      }`}
+                    >
+                      Agent
+                    </button>
+                    <button
+                      onClick={() => setTradingMode("manual")}
+                      className={`px-2 py-0.5 text-[8px] uppercase rounded ${
+                        tradingMode === "manual"
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground hover:bg-accent"
+                      }`}
+                    >
+                      Manual
+                    </button>
                   </div>
-
-                  {/* Order Ticket */}
-                  <div className="flex-1 overflow-hidden">
-                    <OrderTicket
-                      markets={markets}
-                      marketStats={marketStats}
-                      onPlaceOrder={handlePlaceOrder}
-                      mode={tradingMode}
-                    />
-                  </div>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <OrderTicket
+                    markets={markets}
+                    marketStats={marketStats}
+                    onPlaceOrder={handlePlaceOrder}
+                    mode={tradingMode}
+                  />
                 </div>
               </div>
             </div>
+          </div>
+          {/* Bottom: Modal Agent Panel — full width */}
+          <div className="flex-[4] overflow-hidden">
+            <ModalAgentPanel stats={stats} decisions={decisions} enabledCount={enabledMarkets.size} />
           </div>
         </div>
       </div>
