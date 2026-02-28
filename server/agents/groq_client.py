@@ -13,17 +13,36 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama-3.1-8b-instant"
 MAX_RETRIES = 1
 TIMEOUT_S = 2.0
 TEMPERATURE = 0.2
-MAX_TOKENS = 256
+MAX_TOKENS = 128
 
 
 class GroqClassificationError(Exception):
     """Raised when Groq fails to return a valid classification."""
 
     pass
+
+
+def _normalize_action(raw: str) -> str | None:
+    """
+    Extract YES / NO / SKIP from the action field, even if the model
+    returned something verbose like "MORE likely to resolve YES".
+    """
+    if not raw:
+        return None
+    upper = raw.strip().upper()
+    if upper in ("YES", "NO", "SKIP"):
+        return upper
+    if "YES" in upper and "NO" not in upper:
+        return "YES"
+    if "NO" in upper and "YES" not in upper:
+        return "NO"
+    if "SKIP" in upper or "IRRELEVANT" in upper or "AMBIGUOUS" in upper:
+        return "SKIP"
+    return None
 
 
 class GroqClient:
@@ -85,11 +104,13 @@ class GroqClient:
 
                 parsed = json.loads(raw)
 
-                action = parsed.get("action")
-                if action not in ("YES", "NO", "SKIP"):
+                action = _normalize_action(parsed.get("action", ""))
+                if action is None:
                     raise GroqClassificationError(
-                        f"Invalid action {action!r} in Groq response"
+                        f"Could not parse action from Groq response: "
+                        f"{parsed.get('action')!r}"
                     )
+                parsed["action"] = action
 
                 parsed.setdefault("confidence", 0.5)
                 parsed.setdefault("reasoning", "")

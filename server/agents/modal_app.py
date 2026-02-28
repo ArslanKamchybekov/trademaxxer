@@ -31,7 +31,8 @@ image = (
 @app.cls(
     image=image,
     secrets=[modal.Secret.from_name("groq-api-key")],
-    scaledown_window=120,
+    scaledown_window=300,
+    buffer_containers=1,
 )
 @modal.concurrent(max_inputs=20)
 class MarketAgent:

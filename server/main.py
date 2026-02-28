@@ -50,10 +50,21 @@ async def run() -> None:
     dbnews_client = DBNewsWebSocketClient(settings.dbnews.ws_url)
     tagger = NewsTagger(settings.tagger, platform_tag_loader=None)
 
+    # ── Agent test — evaluate ONE event against a fake market ──────
+    from agents.schemas import MarketConfig, StoryPayload, Decision
+
+    test_market = MarketConfig(
+        address="FakeContract1111111111111111111111111111111",
+        question="Will the Federal Reserve cut interest rates before July 2026?",
+        current_probability=0.42,
+        tags=("fed", "macro", "economic_data"),
+    )
+    agent_tested = False
+
     message_count = 0
 
     async def on_news(news):
-        nonlocal message_count
+        nonlocal message_count, agent_tested
         message_count += 1
 
         tag_str = ""
@@ -75,6 +86,61 @@ async def run() -> None:
             logger.error(f"Tagger failed: {e}", extra={"news_id": news.id})
 
         await ws_server.broadcast(news, tagged)
+
+        # ── Fire ONE event at Modal MarketAgent ─────────────────
+        if not agent_tested and tagged is not None:
+            agent_tested = True
+            asyncio.create_task(_test_agent(tagged))
+
+    async def _test_agent(tagged):
+        """One-shot test: send the first tagged event to Modal MarketAgent."""
+        import time
+
+        story = StoryPayload(
+            id=tagged.id,
+            headline=tagged.headline,
+            body=tagged.body,
+            tags=tuple(c.value for c in tagged.categories) or ("macro",),
+            source=tagged.source_handle,
+            timestamp=tagged.timestamp,
+        )
+
+        logger.info(
+            f"\n{'='*60}\n"
+            f"  AGENT TEST — sending to Modal MarketAgent\n"
+            f"  Story:  {story.headline[:80]}\n"
+            f"  Market: {test_market.question}\n"
+            f"  Prob:   {test_market.current_probability:.0%}\n"
+            f"{'='*60}"
+        )
+
+        try:
+            import modal
+
+            AgentCls = modal.Cls.from_name("trademaxxer-agents", "MarketAgent")
+            agent = AgentCls()
+
+            t0 = time.monotonic()
+            result = await agent.evaluate.remote.aio(
+                story.to_dict(), test_market.to_dict()
+            )
+            total_ms = (time.monotonic() - t0) * 1000
+
+            dec = Decision.from_dict(result)
+
+            logger.info(
+                f"\n{'='*60}\n"
+                f"  AGENT RESULT\n"
+                f"  Action:     {dec.action}\n"
+                f"  Confidence: {dec.confidence:.2f}\n"
+                f"  Reasoning:  {dec.reasoning}\n"
+                f"  Groq ms:    {dec.latency_ms:.0f}\n"
+                f"  Total ms:   {total_ms:.0f}  (includes Modal cold start)\n"
+                f"  Prompt:     {dec.prompt_version}\n"
+                f"{'='*60}"
+            )
+        except Exception as e:
+            logger.error(f"Agent test failed: {e}", exc_info=True)
 
     dbnews_client.on_message(on_news)
     dbnews_client.on_error(lambda e: logger.error(f"DBNews error: {e}"))
