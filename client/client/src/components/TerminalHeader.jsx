@@ -64,9 +64,6 @@ export default function TerminalHeader({ status, stats, sessionStart, throughput
         <span className="text-[13px] font-bold tracking-wide text-primary">
           TRADEMAXXER
         </span>
-        <span className="text-[10px] text-muted-foreground">|</span>
-        <StatusDot label="KALSHI" active={wsActive} />
-        <StatusDot label="POLYMARKET" active={wsActive} />
       </div>
 
       <div className="flex items-center gap-3 text-[10px]">
