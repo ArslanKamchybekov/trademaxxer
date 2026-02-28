@@ -2,8 +2,8 @@
 Stream Protocol Definitions
 
 Abstract interfaces that both the in-memory dev stub and the eventual
-C++ pybind11 Redis binding must satisfy. All consumers of the stream
-(dispatcher, executor, monitor) depend only on these protocols.
+C++ pybind11 Redis binding must satisfy. Each agent listener subscribes
+to tag-based channels directly — there is no centralised dispatcher.
 """
 from __future__ import annotations
 
@@ -26,25 +26,25 @@ class StreamProducer(Protocol):
 
 
 @runtime_checkable
-class StreamConsumer(Protocol):
-    """Consumes messages from a named stream using consumer groups."""
+class TaggedStreamConsumer(Protocol):
+    """Subscribes to tag-based channels on the Redis stream."""
 
-    async def consume(
+    async def subscribe(
         self,
-        stream: str,
+        tags: list[str],
         group: str,
         consumer: str,
         callback: Callable[[str, dict[str, Any]], Awaitable[None]],
     ) -> None:
         """
-        Begin consuming messages from *stream* as part of *group*.
+        Subscribe to channels for each tag in *tags*.
 
-        For each message, invoke callback(message_id, payload).
-        Runs until cancelled.
+        When a message is published to any matching tag channel,
+        invoke callback(message_id, payload). Runs until cancelled.
         """
         ...
 
-    async def ack(self, stream: str, group: str, message_id: str) -> None:
+    async def ack(self, tag: str, group: str, message_id: str) -> None:
         """Acknowledge a message as processed."""
         ...
 
@@ -53,13 +53,8 @@ class StreamConsumer(Protocol):
 class MarketRegistryReader(Protocol):
     """Read-only view of the market registry, indexed by tags."""
 
-    async def get_markets_by_tags(self, tags: list[str]) -> list[MarketConfig]:
-        """
-        Return all markets whose tag set intersects with *tags*.
-
-        A market with tags ("fed", "macro") is returned if *tags*
-        contains "fed" OR "macro" (union match).
-        """
+    async def get_all_markets(self) -> list[MarketConfig]:
+        """Return all registered markets."""
         ...
 
     async def get_market(self, address: str) -> MarketConfig | None:
