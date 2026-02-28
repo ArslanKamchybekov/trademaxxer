@@ -48,8 +48,9 @@ def deserialize(raw: str | bytes) -> tuple[str, dict[str, Any]]:
         raise SerializationError(f"Failed to deserialize feed message: {exc}") from exc
 
     if not isinstance(envelope, dict) or "channel" not in envelope or "data" not in envelope:
+        keys = list(envelope.keys()) if isinstance(envelope, dict) else type(envelope).__name__
         raise SerializationError(
-            f"Malformed feed envelope — expected {{channel, data}}, got: {list(envelope.keys())}"
+            f"Malformed feed envelope — expected {{channel, data}}, got: {keys}"
         )
 
     return envelope["channel"], envelope["data"]
