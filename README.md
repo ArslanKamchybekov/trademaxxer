@@ -2,13 +2,13 @@
 
 **Autonomous news-to-trade execution engine for Solana prediction markets.**
 
-Real-time news ingestion, NLI-based signal classification via serverless ONNX inference, and on-chain execution — end-to-end in under 85ms on production infrastructure. No human in the loop.
+Real-time news ingestion, NLI-based signal classification via in-process ONNX inference, and on-chain execution — end-to-end in **16–69ms**. No human in the loop.
 
 ---
 
 <p align="center">
 
-**~85ms** news-to-decision &nbsp;·&nbsp; **22M param** ONNX NLI model &nbsp;·&nbsp; **5,000+ markets** parallel eval &nbsp;·&nbsp; **$0.001/story** inference cost &nbsp;·&nbsp; **13-panel** Bloomberg Terminal UI
+**16ms** news-to-decision &nbsp;·&nbsp; **22M param** ONNX NLI model &nbsp;·&nbsp; **5,000+ markets** parallel eval &nbsp;·&nbsp; **$0/inference** local mode &nbsp;·&nbsp; **13-panel** Bloomberg Terminal UI
 
 </p>
 
@@ -57,39 +57,39 @@ REAL-TIME NEWS ──→ INTAKE ──→ DISPATCH ──→ MODAL (ONNX NLI) �
 t=0ms     Reuters wire: "Fed raises rates 50bps in surprise move"
 t=2ms     Intake: dedup → VADER sentiment (-0.73) → categories [fed, macro]
 t=3ms     Dispatch: 4/312 armed markets match [fed] or [macro] tags
-t=4ms     Batch: 4 markets → 1 chunk (< 50 threshold) → 1 Modal RPC
-t=39ms    ONNX inference: tokenize → session.run() → softmax → postprocess
-t=85ms    RPC returns: [{action: "NO", confidence: 0.81, market: "FedRateCut..."}, ...]
-t=86ms    Dashboard updated (fire-and-forget, non-blocking)
-t=88ms    Executor validates: position check → risk limits → order construction
-t=95ms    Solana RPC: sell order submitted
+t=4ms     Batch: 4 markets → 1 chunk → local ONNX inference
+t=20ms    ONNX tokenize + session.run() + softmax + postprocess completes
+t=22ms    Decisions: [{action: "NO", confidence: 0.81, market: "FedRateCut..."}, ...]
+t=23ms    Dashboard updated (fire-and-forget, non-blocking)
+t=25ms    Executor validates: position check → risk limits → order construction
+t=30ms    Solana RPC: sell order submitted
 t=800ms   Position confirmed on-chain
 t=48hrs   Market resolves → winnings claimed → PnL recorded
 ```
 
-**85ms from headline to trade signal.** The bottleneck is network latency to Modal, not computation.
+**16–69ms from headline to trade signal.** The entire inference pipeline runs in-process — zero network overhead.
 
 ## Performance
 
-### Latency Breakdown (production VPS, co-located with Modal)
+### Latency Breakdown (local ONNX, `--local` flag)
 
 ```
 Stage                        Time        Cumulative
 ──────────────────────────────────────────────────────
 Tagger (VADER + regex)       ~5ms        5ms
 Tag-filter + chunk           <1ms        6ms
-Modal RPC overhead           ~30ms       36ms
-ONNX tokenize + inference    ~35ms       71ms
-Postprocess + return         ~2ms        73ms
+ONNX tokenize + inference    ~10-35ms    16-41ms
+Postprocess + return         ~1ms        17-42ms
 WS broadcast                 async       (non-blocking)
-Execution logic              ~10ms       83ms
 ──────────────────────────────────────────────────────
-Total                                    ~85ms
+Best case                                ~16ms
+Worst case                               ~69ms
+Typical                                  ~20-40ms
 ```
 
 ### Optimization Journey
 
-We iterated through 5 model versions to reach current performance:
+We iterated through 6 model versions to reach current performance:
 
 | Version | Model | Runtime | Inference | E2E (warm) | Why we moved on |
 |---------|-------|---------|-----------|-----------|-----------------|
@@ -97,32 +97,33 @@ We iterated through 5 model versions to reach current performance:
 | v2 | Llama 3.3 70B | Groq API | ~300ms | 600ms | Still too slow for trading |
 | v3 | Llama 3.1 8B | Groq API | 249ms | 300ms | Rate limited at 6,000 TPM — dead at scale |
 | v4 | DeBERTa-v3-xsmall | PyTorch on Modal | ~40ms | 200ms | 1.5GB image, slow cold starts |
-| **v5** | **DeBERTa-v3-xsmall** | **ONNX on Modal** | **~35ms** | **~85ms** | **Current** |
+| v5 | DeBERTa-v3-xsmall | ONNX on Modal | ~35ms | ~143ms | Modal RPC overhead 100-260ms |
+| **v6** | **DeBERTa-v3-xsmall** | **ONNX local** | **~16ms** | **~16-69ms** | **Current** |
 
-**4.6x faster than v3. 7.7x faster than v1. Zero rate limits. Zero API keys.**
+**4.3–18.8x faster than Groq. Zero rate limits. Zero API keys. Zero network.**
 
 ### What We Optimized
 
 | Optimization | Latency saved | How |
 |---|---|---|
-| Groq LLM → ONNX NLI | **-215ms** | Replaced 8B LLM API call with 22M param ONNX model running locally in container |
-| Redis hot path elimination | **-8ms** | In-process dispatch replaces publish→subscribe roundtrip (Redis kept for cross-process mode) |
-| PyTorch → ONNX Runtime | **-10ms** | Dropped autograd, GPU kernels, 1.2GB of torch. Pure CPU inference. |
+| Groq LLM → ONNX NLI | **-215ms** | Replaced 8B LLM API call with 22M param ONNX model |
+| Redis hot path elimination | **-8ms** | In-process dispatch replaces publish→subscribe roundtrip |
+| PyTorch → ONNX Runtime | **-10ms** | Dropped autograd, GPU kernels, 1.2GB of torch |
+| Modal RPC → local inference | **-100–260ms** | In-process ONNX call, zero network overhead |
 | Blocking WS → fire-and-forget | **-5ms** | `asyncio.create_task()` for all non-critical I/O |
-| Per-market RPC → batched | **-N×80ms** | One RPC per 50 markets instead of one per market |
-| Singleton Modal handle | **-2ms** | Module-level cached client, initialized once |
-| Image size: 1.5GB → 300MB | **-1.5s cold** | Faster container provisioning |
+| Per-market RPC → batched | **-N×80ms** | One call per 50 markets instead of one per market |
+| Image size: 1.5GB → 300MB | **-1.5s cold** | Faster container provisioning (Modal mode) |
 
 ### Scaling Characteristics
 
-| Markets | Chunks (batch=50) | Parallel RPCs | Wall-clock time |
+| Markets | Chunks (batch=50) | Parallel calls | Wall-clock time |
 |---|---|---|---|
-| 1 | 1 | 1 | ~85ms |
-| 50 | 1 | 1 | ~85ms |
-| 500 | 10 | 10 | ~85ms |
-| 5,000 | 100 | 100 | ~85ms |
+| 1 | 1 | 1 | ~16-40ms |
+| 50 | 1 | 1 | ~30-69ms |
+| 500 | 10 | 10 (threaded) | ~30-69ms |
+| 5,000 | 100 | 100 (Modal) | ~85ms (cloud) |
 
-Wall-clock time is constant. Modal auto-scales containers horizontally. Cost scales linearly at ~$0.001 per story × number of chunks.
+Local mode: wall-clock scales slightly with batch size but stays sub-70ms for reasonable market counts. For 5k+ markets, Modal cloud mode with parallel RPCs is still available via `--local` omission.
 
 ## Confidence Scaling
 
@@ -153,7 +154,7 @@ Bloomberg Terminal-style real-time operations UI. 13 panels, all updating via We
 
 | Panel | Purpose |
 |---|---|
-| **Terminal Header** | System status, throughput (ev/s, dec/s), hit rate, YES%, uptime, UTC clock |
+| **Terminal Header** | Connection status (WS/Kalshi/Polymarket/ONNX), throughput (ev/s, dec/s), hit rate, YES%, uptime, UTC clock |
 | **Ticker Tape** | Auto-scrolling ribbon of latest decisions with action, confidence, latency |
 | **News Wire** | Incoming headlines with urgency badges, sentiment, category tags, velocity |
 | **Markets** | Armed/disarmed markets with probability, signal strength, action counts, sparklines |

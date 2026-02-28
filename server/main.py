@@ -11,6 +11,8 @@ Usage:
     cd server
     python main.py                # live: DBNews + Modal (NLI, direct dispatch)
     python main.py --mock         # mock: fake headlines + fake agents (no Modal)
+    python main.py --local        # live: DBNews + local ONNX inference (no Modal)
+    python main.py --mock --local # mock + local inference
 """
 from __future__ import annotations
 
@@ -37,6 +39,7 @@ logger = logging.getLogger("trademaxxer")
 BATCH_SIZE = 50
 
 _fast_agent = None
+_local_agent = None
 
 
 def _get_fast_agent():
@@ -49,7 +52,16 @@ def _get_fast_agent():
     return _fast_agent
 
 
-async def run(*, use_mock: bool = False) -> None:
+def _get_local_agent():
+    """Lazy-init the local ONNX NLI agent (singleton)."""
+    global _local_agent
+    if _local_agent is None:
+        from agents.local_inference import LocalNLIAgent
+        _local_agent = LocalNLIAgent()
+    return _local_agent
+
+
+async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     shutdown_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -219,7 +231,7 @@ async def run(*, use_mock: bool = False) -> None:
             timestamp=datetime.now(timezone.utc),
         )
 
-        if use_mock:
+        if use_mock and not use_local:
             for market in test_markets:
                 if market.address in enabled_markets:
                     asyncio.create_task(_mock_eval_and_broadcast(story, market))
@@ -247,23 +259,28 @@ async def run(*, use_mock: bool = False) -> None:
         payload["market_question"] = market.question
         asyncio.create_task(ws_server.broadcast_decision(payload))
 
-    # ── NLI direct dispatch (tag-filter → chunk → parallel RPCs) ─
+    # ── NLI direct dispatch (tag-filter → chunk → parallel eval) ──
 
     async def _nli_eval_and_broadcast(story: StoryPayload) -> None:
-        """Tag-filter enabled markets, chunk into batches, fire parallel Modal RPCs."""
+        """Tag-filter enabled markets, chunk into batches, evaluate (Modal or local)."""
         story_tags = set(story.tags)
-        matching = [
-            m for m in test_markets
-            if m.address in enabled_markets and story_tags & set(m.tags)
-        ]
+        if story_tags:
+            matching = [
+                m for m in test_markets
+                if m.address in enabled_markets and story_tags & set(m.tags)
+            ]
+        else:
+            matching = [
+                m for m in test_markets
+                if m.address in enabled_markets
+            ]
         if not matching:
             return
 
-        agent = _get_fast_agent()
         chunks = [matching[i:i + BATCH_SIZE] for i in range(0, len(matching), BATCH_SIZE)]
 
-        async def _eval_chunk(markets_chunk):
-            batch = [
+        def _build_batch(markets_chunk):
+            return [
                 {
                     "headline": story.headline,
                     "question": m.question,
@@ -273,21 +290,30 @@ async def run(*, use_mock: bool = False) -> None:
                 }
                 for m in markets_chunk
             ]
-            return await agent.evaluate_batch.remote.aio(batch)
 
         t0 = time.monotonic()
         try:
-            chunk_results = await asyncio.gather(
-                *[_eval_chunk(c) for c in chunks]
-            )
+            if use_local:
+                agent = _get_local_agent()
+                chunk_results = await asyncio.gather(
+                    *[asyncio.to_thread(agent.evaluate_batch, _build_batch(c))
+                      for c in chunks]
+                )
+            else:
+                agent = _get_fast_agent()
+                chunk_results = await asyncio.gather(
+                    *[agent.evaluate_batch.remote.aio(_build_batch(c))
+                      for c in chunks]
+                )
         except Exception as e:
             logger.error(f"NLI batch eval failed: {e}")
             return
-        rpc_ms = (time.monotonic() - t0) * 1000
+        eval_ms = (time.monotonic() - t0) * 1000
 
+        mode_tag = "local" if use_local else "modal"
         for results in chunk_results:
             for result in results:
-                result["latency_ms"] = round(rpc_ms, 1)
+                result["latency_ms"] = round(eval_ms, 1)
                 result["headline"] = story.headline
                 mkt = market_by_addr.get(result["market_address"])
                 if mkt:
@@ -296,15 +322,14 @@ async def run(*, use_mock: bool = False) -> None:
                 conf = result["confidence"]
                 addr = result["market_address"][:16]
                 logger.info(
-                    f"[{action}] {addr}… conf={conf:.2f} ({rpc_ms:.0f}ms) "
+                    f"[{action}] {addr}… conf={conf:.2f} ({eval_ms:.0f}ms {mode_tag}) "
                     f"| {story.headline[:60]}"
                 )
                 asyncio.create_task(ws_server.broadcast_decision(result))
 
-    # ── Modal warm-up ──────────────────────────────────────────────
+    # ── Agent warm-up ─────────────────────────────────────────────
 
-    async def _warmup_modal() -> None:
-        logger.info("Warming up Modal container (ONNX NLI agent)...")
+    async def _warmup_agent() -> None:
         dummy_batch = [{
             "headline": "warmup ping — ignore",
             "question": test_markets[0].question,
@@ -312,14 +337,26 @@ async def run(*, use_mock: bool = False) -> None:
             "market_address": "warmup",
             "story_id": "warmup",
         }]
-        try:
-            agent = _get_fast_agent()
-            t0 = time.monotonic()
-            await agent.evaluate_batch.remote.aio(dummy_batch)
-            warmup_ms = (time.monotonic() - t0) * 1000
-            logger.info(f"Modal warm-up complete — {warmup_ms:.0f}ms (container is hot)")
-        except Exception as e:
-            logger.warning(f"Modal warm-up failed (non-fatal): {e}")
+        if use_local:
+            logger.info("Loading local ONNX NLI model...")
+            try:
+                agent = _get_local_agent()
+                t0 = time.monotonic()
+                await asyncio.to_thread(agent.evaluate_batch, dummy_batch)
+                warmup_ms = (time.monotonic() - t0) * 1000
+                logger.info(f"Local ONNX warm-up complete — {warmup_ms:.0f}ms (model loaded)")
+            except Exception as e:
+                logger.warning(f"Local ONNX warm-up failed (non-fatal): {e}")
+        else:
+            logger.info("Warming up Modal container (ONNX NLI agent)...")
+            try:
+                agent = _get_fast_agent()
+                t0 = time.monotonic()
+                await agent.evaluate_batch.remote.aio(dummy_batch)
+                warmup_ms = (time.monotonic() - t0) * 1000
+                logger.info(f"Modal warm-up complete — {warmup_ms:.0f}ms (container is hot)")
+            except Exception as e:
+                logger.warning(f"Modal warm-up failed (non-fatal): {e}")
 
     # ── Register callbacks ─────────────────────────────────────────
     if dbnews_client is not None:
@@ -337,23 +374,24 @@ async def run(*, use_mock: bool = False) -> None:
 
     mock_task: asyncio.Task | None = None
 
-    if use_mock:
+    if use_mock and not use_local:
         logger.info("Mock mode — agents run inline (no Modal)")
     else:
-        await _warmup_modal()
+        await _warmup_agent()
 
     ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
 
+    infer_mode = "local ONNX" if use_local else "Modal RPC"
     if use_mock:
         from mock_feed import run_mock_feed
 
         mock_task = asyncio.create_task(
             run_mock_feed(on_news, interval_range=(1.0, 4.0), shutdown=shutdown_event)
         )
-        logger.info("Mock news feed started — decisions will be generated inline")
+        logger.info(f"Mock news feed started — inference via {infer_mode}")
     else:
         await dbnews_client.connect()
-        logger.info("Connected to DBNews feed — NLI pipeline is live (direct dispatch)")
+        logger.info(f"Connected to DBNews feed — NLI pipeline is live ({infer_mode})")
 
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
@@ -394,5 +432,6 @@ async def run(*, use_mock: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="trademaxxer server")
     parser.add_argument("--mock", action="store_true", help="Use mock news feed instead of DBNews")
+    parser.add_argument("--local", action="store_true", help="Run ONNX NLI locally instead of Modal RPC")
     args = parser.parse_args()
-    asyncio.run(run(use_mock=args.mock))
+    asyncio.run(run(use_mock=args.mock, use_local=args.local))

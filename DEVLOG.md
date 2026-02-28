@@ -620,27 +620,102 @@ Previously, all hardcoded `test_markets` were always active. Every news story tr
 
 ---
 
-## Session 8 — Future Latency Ideas (Feb 28, 2026)
+## Session 8 — Local ONNX Inference (Feb 28, 2026)
 
-### Creative Approaches Considered
+### Goal
 
-With Modal RPC being the floor (~100ms from a Mac, ~30–50ms from a VPS), we brainstormed creative ways to push further:
+Eliminate Modal RPC overhead entirely by running the ONNX NLI model in-process. Target: sub-100ms end-to-end.
 
-1. **Move the entire server onto Modal** — Run news streamer, tagger, AND inference all in a single Modal container. Inference becomes an in-process function call (~35ms, zero RPC). The Mac only receives final decisions for the UI over WebSocket. This is the nuclear option.
+### The Problem
 
-2. **`@modal.asgi_app()` persistent endpoint** — Deploy inference as a FastAPI server on Modal with keep-alive HTTP/2 connections. Bypasses Modal's `.remote()` scheduling layer. Could save 20–50ms by avoiding per-call container scheduling.
+Even after all the Modal optimizations, the RPC overhead was 100–260ms from a local Mac. The ONNX inference itself was only ~35ms — the network round-trip was 3–7x the actual compute. For a trading system where every millisecond counts, sending data to the cloud and back is absurd when the model is 22M parameters and runs on CPU.
 
-3. **Persistent WebSocket bridge** — Open a long-lived WebSocket between the VPS and a Modal container. Push headlines in, receive decisions back — no per-call connection setup.
+### Implementation
+
+Created `agents/local_inference.py` — a `LocalNLIAgent` class that mirrors `FastMarketAgent` but runs entirely in-process:
+
+- Same model: `Xenova/nli-deberta-v3-xsmall` ONNX, loaded via `hf_hub_download()`
+- Same tokenizer: `cross-encoder/nli-deberta-v3-xsmall`
+- Same postprocessing: `nli_postprocess.py`
+- Same batch interface: `evaluate_batch(items) → list[dict]`
+- Runs on `asyncio.to_thread()` to avoid blocking the event loop
+
+Added `--local` flag to `main.py` and `start.sh`:
+
+```bash
+./start.sh --local          # live DBNews + local ONNX (no Modal, no Redis)
+./start.sh --mock --local   # mock headlines + real local ONNX inference
+```
+
+When `--local` is active:
+- `_nli_eval_and_broadcast()` calls `agent.evaluate_batch()` via `asyncio.to_thread()` instead of `agent.evaluate_batch.remote.aio()`
+- No Modal client initialization, no RPC, no network
+- Model loaded once at startup (~2s first time, ~9ms from HuggingFace cache)
+- Warm-up dummy batch confirms model is ready before news starts
+
+### Tag-filter Fallback
+
+Hit a bug: live DBNews headlines (non-English, emojis, social media posts) often get zero categories from the tagger. The tag-filter was silently dropping every story because `story.tags` was empty and couldn't intersect with any market's tags.
+
+Fix: when `story.tags` is empty, evaluate against **all** enabled markets as a fallback. When tags are present, filter normally. This matches the `news:all` fallback pattern from the Redis era.
+
+### Benchmarks
+
+Tested against live DBNews feed with 3 armed markets:
+
+| Metric | Value |
+|--------|-------|
+| **Best latency** | **16ms** |
+| **Worst latency** | **69ms** |
+| **Typical (warm)** | **20–40ms** |
+| **Model load (first time)** | ~2s (HuggingFace download) |
+| **Model load (cached)** | ~9ms |
+
+For comparison:
+
+| Mode | Inference | RPC overhead | Total |
+|------|-----------|-------------|-------|
+| Groq API (v3) | 249ms | 50ms | ~300ms |
+| Modal ONNX (v5) | 35ms | 100–260ms | ~143–305ms |
+| **Local ONNX (v6)** | **16–35ms** | **0ms** | **16–69ms** |
+
+**4.3–18.8x faster than Modal. 7.5–18.8x faster than Groq.** Zero network dependency.
+
+### Why Local Is Faster Than Modal's Own Inference
+
+Apple Silicon (M-series) has unified memory with high bandwidth and excellent single-threaded CPU performance. The ONNX model is tiny (22M params). On Apple Silicon, inference is ~8–35ms vs ~35ms on Modal's cloud CPU. The model literally runs faster on a MacBook than on a cloud VM.
+
+### Architecture Decisions
+
+1. **`--local` as a flag, not a replacement** — Modal is still available for production VPS deployment where local compute isn't available. `--local` is the development/low-latency path.
+
+2. **`asyncio.to_thread()` for inference** — ONNX inference is CPU-bound (~20ms). Running it on the event loop would block WebSocket handling. `to_thread()` offloads to a thread pool, keeping the event loop responsive.
+
+3. **Same interface, swappable backend** — `LocalNLIAgent.evaluate_batch()` has the exact same input/output contract as `FastMarketAgent.evaluate_batch()`. The dispatcher doesn't know or care which one it's talking to.
+
+---
+
+## Session 9 — Future Latency Ideas (Feb 28, 2026)
+
+### Creative Approaches for Production
+
+1. **Move the entire server onto Modal** — Run news streamer, tagger, AND inference all in a single Modal container. Zero RPC. The local machine only shows the dashboard. Est. ~40ms total.
+
+2. **`@modal.asgi_app()` persistent endpoint** — Deploy inference as a FastAPI server on Modal with keep-alive HTTP/2. Bypasses `.remote()` scheduling. Could save 20–50ms vs standard RPC.
+
+3. **Persistent WebSocket bridge** — Long-lived WS between VPS and Modal container. Push headlines in, receive decisions back — no per-call connection setup.
+
+4. **Co-located VPS** — Deploy on a VPS in the same AWS region as Modal. Est. ~30–50ms RPC overhead vs ~100–260ms from a Mac.
 
 ### What's Next
 
 - [x] True batching: chunked parallel RPCs (done — Session 6)
 - [x] Dynamic market management: UI toggle (done — Session 7)
-- [ ] Deploy server on co-located VPS (est. savings: 80–200ms)
+- [x] `--local` flag: local ONNX inference, 16–69ms (done — Session 8)
+- [ ] Deploy server on co-located VPS
 - [ ] Move entire pipeline to Modal (est. total latency: ~40ms)
-- [ ] `--local-inference` flag: run NLI model locally when Modal RPC exceeds budget
-- [ ] Per-stage timing instrumentation (tagger → dispatch → Modal → decision)
-- [ ] Market registry in Redis (replace hardcoded `MarketConfig`)
+- [ ] Per-stage timing instrumentation (tagger → dispatch → inference → decision)
+- [ ] Market registry from on-chain state (replace hardcoded `MarketConfig`)
 - [ ] Decision queue (decouple agents from executor)
 - [ ] Solana executor — read decisions, fire trades via proprietary API
 - [ ] Position monitor — resolution, edge compression, contradicting news, time decay

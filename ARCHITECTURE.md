@@ -60,7 +60,7 @@ graph LR
     style H fill:#ff8844,color:#fff
 ```
 
-### v4 (current): ONNX NLI + Direct Dispatch (~143ms local, ~85ms VPS)
+### v5 (Modal ONNX): Direct Dispatch (~143ms local, ~85ms VPS)
 
 ```mermaid
 graph LR
@@ -77,6 +77,23 @@ graph LR
     style G fill:#00aa44,color:#fff
 ```
 
+### v6 (current): Local ONNX — 16–69ms
+
+```mermaid
+graph LR
+    A["News arrives<br/>t=0ms"] --> B["Tagger<br/>+5ms"]
+    B --> C["Tag-filter + chunk<br/>+1ms"]
+    C --> D["Local ONNX inference<br/>+10-35ms"]
+    D --> E["Postprocess<br/>+1ms"]
+    E --> F["async WS broadcast<br/>+0ms (non-blocking)"]
+    F --> G["Decision delivered<br/>t≈16-69ms"]
+
+    style C fill:#00aa44,color:#fff
+    style D fill:#00ff44,color:#000
+    style F fill:#00aa44,color:#fff
+    style G fill:#00ff44,color:#000
+```
+
 ### What we cut
 
 ```mermaid
@@ -86,12 +103,13 @@ graph TD
         R2["Redis subscribe<br/>-5ms"]
         GR["Groq API call<br/>-250ms"]
         BL["Blocking WS await<br/>-5ms"]
+        MR["Modal RPC overhead<br/>-100-260ms"]
     end
 
     subgraph OPTIMIZED["Optimized"]
-        PT["PyTorch → ONNX<br/>40ms → 35ms"]
-        SG["Singleton Modal handle<br/>-2ms/call"]
+        PT["PyTorch → ONNX<br/>40ms → 16ms"]
         BA["1-per-market RPC → batched<br/>N calls → ceil(N/50) calls"]
+        LC["Cloud → local inference<br/>143ms → 16-69ms"]
     end
 
     style KILLED fill:#1a0000,stroke:#ff4444
@@ -378,6 +396,10 @@ timeline
         Chunked batching : Scales to 5k+ markets
         Fire-and-forget  : Non-blocking WS broadcasts
         Market toggles   : User-controlled monitoring
+    section Session 8 : Local ONNX
+        --local flag  : 16–69ms end-to-end
+                      : Zero network, zero cost
+                      : Apple Silicon inference
 ```
 
 ---
@@ -431,14 +453,14 @@ graph LR
         B4 ~~~ B5["PyTorch<br/>40ms"]
     end
 
-    subgraph After["After: ~143ms (Mac) / ~85ms (VPS)"]
+    subgraph After["After: 16–69ms (local ONNX)"]
         direction TB
-        A1["ONNX Runtime<br/>35ms"] ~~~ A2["Direct dispatch<br/>1ms"]
+        A1["ONNX Runtime<br/>10-35ms"] ~~~ A2["Direct dispatch<br/>1ms"]
         A2 ~~~ A3["Fire-and-forget WS<br/>0ms"]
-        A3 ~~~ A4["Modal RPC<br/>100ms (Mac)<br/>30ms (VPS)"]
+        A3 ~~~ A4["No network<br/>0ms"]
     end
 
-    Before -->|"2.4x faster<br/>(4x on VPS)"| After
+    Before -->|"5–22x faster"| After
 
     style Before fill:#1a0000,stroke:#ff4444
     style After fill:#001a00,stroke:#00cc44
@@ -446,30 +468,32 @@ graph LR
 
 ---
 
-## 13. Future: Full Modal-Hosted Pipeline (~40ms target)
+## 13. Inference Modes — Local vs Modal vs Modal-Hosted
 
 ```mermaid
-graph LR
-    subgraph MODAL["All on Modal"]
-        NEWS2["News Streamer<br/>(WebSocket to DBNews)"]
-        TAG2["Tagger<br/>(in-process)"]
-        NLI2["ONNX NLI<br/>(in-process, ~35ms)"]
-        DEC2["Decision Logic"]
-        WS2["WebSocket Server<br/>(push to clients)"]
+graph TD
+    subgraph LOCAL["--local (current best: 16-69ms)"]
+        L1["News → Tagger → ONNX (in-process) → Decision"]
+        L2["Zero network. All on your machine."]
     end
 
-    subgraph MAC["Your Mac"]
-        DASH2["React Dashboard<br/>(display only)"]
+    subgraph MODAL_RPC["default (Modal RPC: ~143ms Mac / ~85ms VPS)"]
+        M1["News → Tagger → Modal RPC → ONNX (cloud) → Decision"]
+        M2["Scales to 5k+ markets via parallel RPCs."]
     end
 
-    DB2["DBNews"] -->|WebSocket| NEWS2
-    NEWS2 --> TAG2
-    TAG2 --> NLI2
-    NLI2 --> DEC2
-    DEC2 --> WS2
-    WS2 -->|"results only<br/>(not latency-critical)"| DASH2
+    subgraph MODAL_HOSTED["future (Modal-hosted: ~40ms est.)"]
+        F1["News + Tagger + ONNX all on Modal"]
+        F2["Zero RPC. Mac just shows dashboard."]
+    end
 
-    style NLI2 fill:#00aa44,color:#fff
+    style LOCAL fill:#001a00,stroke:#00ff44
+    style MODAL_RPC fill:#0a0a1a,stroke:#4488ff
+    style MODAL_HOSTED fill:#1a1a00,stroke:#ffcc00
 ```
 
-**Zero RPC overhead.** News → tag → infer → decide happens entirely inside Modal. The Mac just shows the dashboard. Projected total: **~40ms**.
+| Mode | Command | E2E Latency | Scaling | Cost |
+|------|---------|-------------|---------|------|
+| **Local ONNX** | `--local` | **16–69ms** | Single machine | $0 |
+| Modal RPC | (default) | 85–200ms | 5k+ markets | ~$0.001/story |
+| Modal-hosted | (planned) | ~40ms est. | 5k+ markets | ~$0.001/story |
