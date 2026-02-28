@@ -116,6 +116,7 @@ HEADLINES: list[tuple[str, str, tuple[str, ...]]] = [
 ]
 
 SOURCES = ["Reuters", "Bloomberg", "AP", "TASS", "AFP", "Dow Jones", "FT"]
+MOCK_SOURCE_TYPES = [SourceType.TWITTER, SourceType.TELEGRAM, SourceType.RSS, SourceType.NEWS_WIRE]
 
 
 def _make_item(headline: str, body: str, categories: tuple[str, ...]) -> RawNewsItem:
@@ -124,7 +125,7 @@ def _make_item(headline: str, body: str, categories: tuple[str, ...]) -> RawNews
         timestamp=datetime.now(timezone.utc),
         headline=headline,
         body=body,
-        source_type=SourceType.NEWS_WIRE,
+        source_type=random.choice(MOCK_SOURCE_TYPES),
         source_handle=random.choice(SOURCES),
         source_description="",
         source_url="",
