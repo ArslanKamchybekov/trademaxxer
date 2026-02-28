@@ -98,6 +98,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
     logger.info("Fetching live markets from Kalshi...")
     markets = []
+    live_market_manager = None
 
     try:
         async with KalshiMarketRegistry() as registry:
@@ -108,6 +109,20 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
             for i, market in enumerate(live_markets[:3]):
                 logger.info(f"  {i+1}. {market.address}: {market.question[:60]}...")
             markets = live_markets
+
+            # Initialize live market manager for real-time price updates
+            if not use_mock:
+                from market_registry.kalshi_ws import LiveMarketManager
+
+                api_key = os.environ.get("KALSHI_API_KEY")
+                private_key = os.environ.get("KALSHI_PRIVATE_KEY")
+
+                if api_key and private_key:
+                    live_market_manager = LiveMarketManager(api_key, private_key)
+                    await live_market_manager.__aenter__()
+                    logger.info("Initialized Kalshi WebSocket for live price updates")
+                else:
+                    logger.warning("KALSHI_API_KEY or KALSHI_PRIVATE_KEY missing - using static prices")
         else:
             logger.warning("No suitable markets found from Kalshi after filtering")
             logger.info("Server will run without markets - check filtering criteria")
@@ -133,6 +148,31 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         }
         logger.info(f"Markets state payload: {len(payload['markets'])} markets, {len(payload['enabled'])} enabled")
         return payload
+
+    # ── Live price updates ─────────────────────────────────────────
+    async def _handle_price_update(ticker: str, price: float) -> None:
+        """Handle real-time price updates from Kalshi WebSocket."""
+        # Update the market in our local state
+        market = market_by_addr.get(ticker)
+        if market:
+            old_price = market.current_probability
+            market.current_probability = price
+
+            # Broadcast price update to connected clients
+            await ws_server.broadcast_json({
+                "type": "price_update",
+                "data": {
+                    "ticker": ticker,
+                    "price": price,
+                    "prev_price": old_price,
+                    "timestamp": time.time()
+                }
+            })
+
+            logger.debug(f"Price update {ticker}: {old_price:.3f} → {price:.3f}")
+
+    if live_market_manager:
+        live_market_manager.on_price_update(_handle_price_update)
 
     async def _handle_command(data: dict) -> None:
         address = data.get("address", "")
@@ -380,6 +420,18 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     )
     logger.info("Demo headline injector started")
 
+    # Start live market price updates
+    if live_market_manager and markets:
+        try:
+            # Filter out demo markets for live updates (they don't have real tickers)
+            real_markets = [m for m in markets if m.address not in demo_addrs]
+            if real_markets:
+                await live_market_manager.start(real_markets)
+                logger.info(f"Started live price updates for {len(real_markets)} real markets")
+        except Exception as e:
+            logger.error(f"Failed to start live market updates: {e}")
+            # Continue without live updates
+
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
 
@@ -395,6 +447,15 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
                 pass
 
     await ws_server.stop()
+
+    # Stop live market updates
+    if live_market_manager:
+        try:
+            await live_market_manager.stop()
+            await live_market_manager.__aexit__(None, None, None)
+            logger.info("Stopped live market updates")
+        except Exception as e:
+            logger.warning(f"Error stopping live market manager: {e}")
 
     if dbnews_client is not None:
         await dbnews_client.disconnect()

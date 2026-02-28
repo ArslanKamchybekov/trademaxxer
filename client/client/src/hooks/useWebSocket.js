@@ -228,6 +228,15 @@ export default function useWebSocket() {
           const msg = JSON.parse(event.data)
           if (msg.type === "news") handleNews(msg.data)
           else if (msg.type === "decision") handleDecision(msg.data)
+          else if (msg.type === "price_update") {
+            // Handle real-time price updates from Kalshi
+            const { ticker, price, prev_price } = msg.data
+            setMarkets(prev => prev.map(market =>
+              market.address === ticker
+                ? { ...market, current_probability: price }
+                : market
+            ))
+          }
           else if (msg.type === "connected" && msg.markets_state) {
             setMarkets(msg.markets_state.markets || [])
             setEnabledMarkets(new Set(msg.markets_state.enabled || []))
