@@ -1,6 +1,6 @@
 # TradeMaxxer
 
-Autonomous news-to-trade pipeline on Solana. Ingests real-time news, classifies it with Groq via Modal serverless, and executes trades on-chain — all in under one second, with no human in the loop.
+Autonomous news-to-trade pipeline on Solana. Ingests real-time news, classifies it with a pretrained NLI model on Modal serverless, and executes trades on-chain — all with no human in the loop.
 
 ## Quickstart
 
@@ -10,7 +10,6 @@ Autonomous news-to-trade pipeline on Solana. Ingests real-time news, classifies 
 - Node.js 18+
 - Redis server (local or remote) — only needed for live mode
 - [Modal](https://modal.com) account + API key — only needed for live mode
-- [Groq](https://groq.com) API key — only needed for live mode
 
 ### 1. Server
 
@@ -20,12 +19,13 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Create a `.env` file (only needed for live mode):
+Create a `.env` file with your DBNews credentials (only needed for live mode):
 
 ```
-GROQ_API_KEY=gsk_...
+DBNEWS_USERNAME=...
+DBNEWS_PASSWORD=...
+DBNEWS_WS_URL=wss://dbws.io
 REDIS_URL=redis://localhost:6379/0
-DBNEWS_WS_URL=wss://...
 ```
 
 ### 2. Modal setup (only needed for live mode)
@@ -35,13 +35,14 @@ pip install modal
 modal setup          # opens browser to authenticate your Modal account
 ```
 
-Then store your Groq API key as a Modal secret — the deployed agent containers read it from there, not from `.env`:
+Deploy the NLI agent to Modal:
 
 ```bash
-modal secret create groq-api-key GROQ_API_KEY=gsk_...
+cd server
+modal deploy agents/modal_app_fast.py
 ```
 
-This creates a secret called `groq-api-key` in your Modal workspace that the `MarketAgent` class references via `modal.Secret.from_name("groq-api-key")`.
+This builds a container image with the pretrained `cross-encoder/nli-deberta-v3-xsmall` model baked in. No API keys or secrets needed — the model runs locally inside the container.
 
 ### 3. Frontend
 
@@ -52,46 +53,41 @@ npm install
 
 ### 4. Run
 
-**Mock mode** — no external services needed, generates fake news + fake agent decisions:
+**One command (recommended):**
 
 ```bash
-# Terminal 1: backend
-cd server && python3 main.py --mock
-
-# Terminal 2: frontend
-cd client/client && npm run dev
+./start.sh --mock    # mock mode: no external services needed
+./start.sh           # live mode: Redis + DBNews + Modal NLI agents
 ```
 
-Open `http://localhost:5173` — the Bloomberg Terminal dashboard will start populating with mock data immediately.
+This starts Redis (live mode only), the Python server, and the Vite dev server. Ctrl-C stops everything.
 
-**Live mode** — requires Redis, Modal deployed, DBNews credentials:
+Open `http://localhost:5173` — the Bloomberg Terminal dashboard will start populating immediately.
+
+**Manual (if you prefer separate terminals):**
 
 ```bash
-# Terminal 0: Redis
-redis-server
+# Mock mode — no external services
+cd server && python3 main.py --mock          # Terminal 1
+cd client/client && npm run dev              # Terminal 2
 
-# Terminal 1: deploy Modal agents (one-time, re-run after code changes)
-cd server && modal deploy agents/modal_app.py
-
-# Terminal 2: backend
-cd server && python3 main.py
-
-# Terminal 3: frontend
-cd client/client && npm run dev
+# Live mode — requires Redis + Modal deployed
+redis-server                                 # Terminal 1
+cd server && python3 main.py                 # Terminal 2
+cd client/client && npm run dev              # Terminal 3
 ```
 
 To verify Modal is working before starting the full pipeline:
 
 ```bash
-# Quick smoke test — should print a Decision dict
 cd server && python3 -c "
 import modal, asyncio
-AgentCls = modal.Cls.from_name('trademaxxer-agents', 'MarketAgent')
-agent = AgentCls()
-result = asyncio.run(agent.evaluate.remote.aio(
-    {'id': 'test', 'headline': 'Test headline', 'body': '', 'tags': ['test'], 'source': 'test', 'timestamp': '2026-01-01T00:00:00+00:00'},
-    {'address': 'TestAddr', 'question': 'Test?', 'current_probability': 0.5, 'tags': ['test'], 'expires_at': None}
-))
+Cls = modal.Cls.from_name('trademaxxer-agents-fast', 'FastMarketAgent')
+agent = Cls()
+result = asyncio.run(agent.evaluate_batch.remote.aio([
+    {'headline': 'Fed raises rates 50bps', 'question': 'Will the Fed cut rates?',
+     'probability': 0.5, 'market_address': 'test', 'story_id': 'test'}
+]))
 print(result)
 "
 ```
@@ -99,7 +95,7 @@ print(result)
 ## Architecture
 
 ```
-NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGENTS (Groq) ──→ DASHBOARD
+NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGENTS (NLI) ──→ DASHBOARD
                                                                              │
                                                                      (not yet built)
                                                                              ↓
@@ -113,9 +109,9 @@ NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGEN
 | 1 | **News Feed** | WebSocket connection to DBNews provider (~2 stories/sec, spikes during major events). Mock mode generates 100 realistic headlines. | Always-on Python process on VPS |
 | 2 | **Intake Service** | Normalize, tag (sentiment + category + tickers), and broadcast — drops noise in <5ms | Same process as news feed |
 | 3 | **Redis Pub/Sub** | Tag-based fan-out channels (`news:all`, `news:category:macro`, etc.). Each listener subscribes to its market's tags. | Local or Upstash Redis |
-| 4 | **Modal Agents** | One agent per market, subscribes to relevant tags, wakes on matching news, calls Groq, scales to zero. Mock mode returns random decisions inline. | Modal (pay per use) |
+| 4 | **Modal Agents** | One agent per market, subscribes to relevant tags, wakes on matching news, runs NLI model (DeBERTa), scales to zero. Mock mode returns random decisions inline. | Modal (pay per use) |
 | 5 | **Dashboard** | Bloomberg Terminal-style UI with 13 live panels: news wire, decision feed, position book, charts, ticker tape, latency stats | React + Vite (local or Vercel) |
-| 6 | **Market Registry** | Tag-indexed market data linking on-chain markets to Groq decisions | Planned — currently hardcoded `MarketConfig` |
+| 6 | **Market Registry** | Tag-indexed market data linking on-chain markets to agent decisions | Planned — currently hardcoded `MarketConfig` |
 | 7 | **Solana Executor** | Reads decisions, fires trades via proprietary API | Not started |
 | 8 | **Position Monitor** | Polls open positions every 30s for resolution, edge compression, contradicting news, time decay | Not started |
 
@@ -125,10 +121,10 @@ NEWS FEED ──→ INTAKE / TAGGER ──→ REDIS PUB/SUB ──→ MODAL AGEN
 t=0ms     Reuters fires: "Fed raises rates 50bps surprise"
 t=2ms     Intake dedup + keyword tag → [fed, macro] → published to news:category:macro channel
 t=5ms     4 agents subscribed to [fed] or [macro] wake up in parallel
-t=10ms    Each agent prompts Groq with headline + its market + current price
-t=300ms   Each agent gets back YES, NO, or SKIP for its market
-t=305ms   Decisions broadcast to dashboard via WebSocket
-t=310ms   (future) Executor reads decisions, validates positions & market state
+t=10ms    Each agent sends headline + market question to Modal NLI model
+t=50ms    NLI model returns entailment/contradiction/neutral → YES/NO/SKIP
+t=55ms    Decisions broadcast to dashboard via WebSocket
+t=60ms    (future) Executor reads decisions, validates positions & market state
 t=800ms   (future) Positions confirmed on-chain, tracked in Redis
 t=48hrs   (future) Markets resolve → claim winnings → record PnL
 ```
@@ -140,39 +136,51 @@ Every raw story passes through two gates:
 1. **Tagger** — headline scanned for sentiment (VADER), categories (`geopolitics`, `macro`, `crypto`, etc.), and tickers. Categories determine which Redis channels the story publishes to.
 2. **Fan-out** — tagged story broadcast to WebSocket (dashboard) and published to Redis Pub/Sub channels (`news:all` + per-category channels).
 
-## Modal Agents (Groq) — LIVE
+## Modal Agents (NLI) — LIVE
 
-Every market has its own agent deployed on Modal serverless. Each agent's listener subscribes to the Redis Pub/Sub channels matching its market's tags. When a story arrives on any subscribed channel, the listener calls Modal, which runs Groq classification and emits a Decision.
+Every market has its own agent deployed on Modal serverless. Each agent's listener subscribes to the Redis Pub/Sub channels matching its market's tags. When a story arrives on any subscribed channel, the listener calls Modal, which runs a pretrained NLI model and emits a Decision.
+
+**Model:** `cross-encoder/nli-deberta-v3-xsmall` (22M params, CPU inference)
+
+Classification is framed as Natural Language Inference:
+- **Premise:** news headline
+- **Hypothesis:** market question (e.g. "Will oil exceed $120/barrel?")
+- **Output:** entailment → YES, contradiction → NO, neutral → SKIP
+
+Confidence is scaled by market probability — signals already priced in get discounted.
 
 **Per-agent flow:**
 
 1. `AgentListener` subscribes to Redis channels (e.g. `news:all`, `news:category:macro`) via `FeedSubscriber`
 2. Story arrives → deduplication via `seen` set → deserialize to `StoryPayload`
-3. Calls Modal `MarketAgent.evaluate()` remotely (or `mock_evaluate()` in mock mode)
-4. Modal container prompts Groq (`llama-3.1-8b-instant`) with headline + market question + current probability
-5. Groq returns JSON: `{"action": "YES"|"NO"|"SKIP", "confidence": 0.0-1.0, "reasoning": "..."}`
+3. Calls Modal `FastMarketAgent.evaluate_batch()` remotely (or `mock_evaluate()` in mock mode)
+4. Modal container runs NLI inference: tokenize → forward pass → softmax → postprocess
+5. Returns `{"action": "YES"|"NO"|"SKIP", "confidence": 0.0-1.0, "reasoning": "..."}`
 6. Decision broadcast to dashboard via WebSocket `on_decision` callback
 7. Container stays warm for 5min (`scaledown_window=300`), then scales to zero
 
-**Measured latency (live on real news feed):**
+**Why NLI over Groq LLM:**
 
-| Metric | Cold start | Warm container |
-|--------|-----------|----------------|
-| Groq inference | 249ms | 249ms |
-| Modal overhead | ~2700ms | ~50–80ms |
-| **Total** | **~3000ms** | **~300–330ms** |
+| | Groq (llama-3.1-8b-instant) | NLI (DeBERTa-v3-xsmall) |
+|---|---|---|
+| Inference | ~250ms | ~10ms |
+| Rate limits | 6000 TPM free tier | None |
+| API dependency | Yes (external) | None (model in container) |
+| Cost per call | Token-based | CPU time only |
+| Batch support | No | Yes (single forward pass) |
 
 Modal warm-up fires a dummy evaluation at startup to avoid cold starts on the first real trade.
 
-**Scaling:** 0 news → 0 containers → $0. One story matching 4 markets → 4 parallel evaluations. `@modal.concurrent(max_inputs=20)` means each container handles up to 20 Groq calls simultaneously (I/O-bound). `buffer_containers=1` keeps one pre-warmed.
+**Scaling:** 0 news → 0 containers → $0. One story matching 4 markets → 4 parallel evaluations. `buffer_containers=1` keeps one pre-warmed.
 
-**Prompt evolution:**
+**Model evolution:**
 
-| Version | Model | Groq latency | Issue |
-|---------|-------|-------------|-------|
-| v1 | llama-3.3-70b-versatile | 311ms | Model echoed prompt phrasing as action |
-| v2 | llama-3.3-70b-versatile | ~300ms | Fixed with `_normalize_action()` parser |
-| v3 | llama-3.1-8b-instant | 249ms | Compact prompt, faster model — **current** |
+| Version | Model | Inference | Issue |
+|---------|-------|-----------|-------|
+| v1 (Groq) | llama-3.3-70b-versatile | 311ms | Verbose output, prompt parsing failures |
+| v2 (Groq) | llama-3.3-70b-versatile | ~300ms | Fixed with `_normalize_action()` parser |
+| v3 (Groq) | llama-3.1-8b-instant | 249ms | Rate limited at scale (6000 TPM) |
+| nli-v1 | DeBERTa-v3-xsmall | ~10ms | **Current** — no rate limits, no API keys |
 
 ## Mock Mode
 
@@ -232,10 +240,12 @@ trademaxxer/
 │   │   └── lib/sentiment_analyzer.py    # VADER wrapper
 │   ├── agents/
 │   │   ├── schemas.py                   # MarketConfig, StoryPayload, Decision
-│   │   ├── prompts.py                   # Versioned Groq prompt templates (v3)
-│   │   ├── groq_client.py              # Async Groq wrapper + action normalization
-│   │   ├── agent_logic.py              # evaluate(story, market, groq) → Decision
-│   │   ├── modal_app.py                # Modal App definition — deployed serverless
+│   │   ├── nli_postprocess.py           # NLI logits → YES/NO/SKIP + confidence scaling
+│   │   ├── modal_app_fast.py            # Modal App (NLI) — current deployed agent
+│   │   ├── modal_app.py                 # Modal App (Groq) — legacy, superseded
+│   │   ├── prompts.py                   # Versioned Groq prompt templates (legacy)
+│   │   ├── groq_client.py              # Async Groq wrapper (legacy)
+│   │   ├── agent_logic.py              # evaluate(story, market, groq) → Decision (legacy)
 │   │   └── listener.py                 # Per-market Redis subscriber → Modal caller
 │   ├── pub_sub_feed/                   # Redis pub/sub library
 │   │   ├── publisher.py                # FeedPublisher
@@ -266,6 +276,7 @@ trademaxxer/
 │   │       └── SystemBar.jsx           # Footer status bar
 │   ├── package.json
 │   └── vite.config.js
+├── start.sh                            # One-command launcher (Redis + server + frontend)
 ├── DEVLOG.md                           # Development log with benchmarks
 └── README.md
 ```
@@ -283,7 +294,7 @@ Server 1 — VPS ($5/mo)
 └── (future) position monitor
 
 Server 2 — Modal (pay per use)
-└── per-market Groq agents (MarketAgent class)
+└── per-market NLI agents (FastMarketAgent class)
 
 Server 3 — Redis (local or Upstash free tier)
 ├── news:all channel
@@ -307,16 +318,17 @@ Server 4 — Vercel (free)
 **Built from scratch:**
 
 - News streamer / intake service — DBNews websocket, normalizer, tagger, WS broadcast, Redis pub/sub publisher
-- Modal per-market agents — deployed, benchmarked, warm-up system
+- Modal NLI agents — pretrained DeBERTa model, batched inference, warm-up system
+- NLI postprocessor — logit mapping, probability-aware confidence scaling
 - Per-market listeners — tag-based Redis subscription, deduplication, Modal invocation
 - Mock system — 100 headlines, random agent evaluator, full offline pipeline
 - Bloomberg Terminal dashboard — 13 panels, real-time WebSocket, charts, animations
-- Stream abstraction layer — Protocol interfaces (legacy, superseded by `pub_sub_feed`)
+- Single-command launcher (`start.sh`)
 
 **Third-party:**
 
 - DBNews — real-time news websocket feed
-- Groq API — LLM inference (`llama-3.1-8b-instant`)
+- HuggingFace `cross-encoder/nli-deberta-v3-xsmall` — pretrained NLI model
 - VADER — financial sentiment analysis
 - Redis — pub/sub message fan-out
 - Modal — serverless compute
@@ -332,7 +344,7 @@ Server 4 — Vercel (free)
 | Intake / tagger | **Live** | Sentiment + category + tickers in <5ms |
 | WS broadcast server | **Live** | News + decisions to dashboard |
 | Redis Pub/Sub | **Live** | Python `pub_sub_feed` library, tag-based channels |
-| Modal agents (Groq) | **Deployed** | ~300ms warm, 20 concurrent per container |
+| Modal agents (NLI) | **Deployed** | DeBERTa-v3-xsmall, ~10ms inference, no rate limits |
 | Mock agents | **Live** | Random decisions, 150–400ms simulated latency |
 | Agent listeners | **Live** | 1 per market, deduplication, `news:all` fallback |
 | Dashboard | **Live** | Bloomberg Terminal, 13 panels, real-time |

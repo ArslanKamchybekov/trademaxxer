@@ -3,7 +3,7 @@ trademaxxer server — top-level orchestrator
 
 Runs all services in a single async event loop:
   - news_streamer: DBNews websocket → tagger → broadcast (WS + Redis pub/sub)
-  - agent listeners: subscribe to Redis channels → Modal (Groq) → log decisions
+  - agent listeners: subscribe to Redis channels → Modal (NLI) → log decisions
   - (future) executor: decision queue → proprietary trade API
   - (future) monitor: position tracking + exit logic
 
@@ -163,24 +163,23 @@ async def run(*, use_mock: bool = False) -> None:
 
     async def _warmup_modal(market: MarketConfig) -> None:
         """Fire a dummy evaluation to force Modal container boot before real news."""
-        dummy = StoryPayload(
-            id="warmup-ping",
-            headline="warmup ping — ignore",
-            body="",
-            tags=("warmup",),
-            source="trademaxxer",
-            timestamp=datetime.now(timezone.utc),
-        )
-
-        logger.info("Warming up Modal container...")
+        logger.info("Warming up Modal container (NLI agent)...")
         try:
             import modal
 
-            AgentCls = modal.Cls.from_name("trademaxxer-agents", "MarketAgent")
-            agent = AgentCls()
+            Cls = modal.Cls.from_name("trademaxxer-agents-fast", "FastMarketAgent")
+            agent = Cls()
+
+            dummy_batch = [{
+                "headline": "warmup ping — ignore",
+                "question": market.question,
+                "probability": 0.5,
+                "market_address": "warmup",
+                "story_id": "warmup",
+            }]
 
             t0 = time.monotonic()
-            await agent.evaluate.remote.aio(dummy.to_dict(), market.to_dict())
+            await agent.evaluate_batch.remote.aio(dummy_batch)
             warmup_ms = (time.monotonic() - t0) * 1000
 
             logger.info(f"Modal warm-up complete — {warmup_ms:.0f}ms (container is hot)")

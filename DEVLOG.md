@@ -308,12 +308,112 @@ Rewrote `useWebSocket.js` to track rich metrics:
 
 ---
 
+## Session 4 — Groq → NLI Model Migration (Feb 28, 2026)
+
+### Goal
+
+Replace Groq API calls with a pretrained NLI model running directly on Modal. Eliminate external API dependency, eliminate rate limits, reduce inference latency.
+
+### The Problem
+
+Running live against DBNews with 4 markets, Groq's free tier rate limit (6000 TPM) was exhausted instantly. Every headline triggered 4 separate Groq API calls (one per market listener), burning ~280 tokens each. During high-volume news events (e.g. Iran situation), the feed was producing 2+ stories/sec — that's 8+ Groq calls/sec, way past the limit. Half the evaluations were failing with `429 Rate limit exceeded`.
+
+Beyond rate limits, the per-call latency was 250–330ms for Groq inference alone, plus Modal RPC overhead. Total latency per decision was ~300–400ms warm, ~3s cold.
+
+### The Solution
+
+Replaced Groq with `cross-encoder/nli-deberta-v3-xsmall` — a pretrained Natural Language Inference model that frames classification as a premise-hypothesis entailment task:
+
+- **Premise:** news headline
+- **Hypothesis:** market question (e.g. "Will oil prices exceed $120/barrel before June 2026?")
+- **Output:** entailment (YES) / contradiction (NO) / neutral (SKIP)
+
+This is a 22M parameter DeBERTa model that runs entirely on CPU in ~10ms per batch.
+
+### Architecture: What Changed
+
+**Before (Groq):**
+```
+Story → Redis → Listener → Modal → Groq API → Decision
+                                    ↑ 250ms + network
+                                    ↑ rate limited
+                                    ↑ separate call per market
+```
+
+**After (NLI):**
+```
+Story → Redis → Listener → Modal → NLI model → Decision
+                                    ↑ ~10ms inference
+                                    ↑ no rate limits
+                                    ↑ batched (all markets in one call)
+```
+
+### New Files
+
+- **`agents/modal_app_fast.py`** — New Modal app (`trademaxxer-agents-fast`). Downloads `cross-encoder/nli-deberta-v3-xsmall` from HuggingFace during image build (baked in, no download on cold start). `FastMarketAgent.evaluate_batch()` takes a list of items, tokenizes, runs a single forward pass, returns decisions.
+
+- **`agents/nli_postprocess.py`** — Maps NLI logits to YES/NO/SKIP. Label order for this model: `0=contradiction→NO, 1=entailment→YES, 2=neutral→SKIP`. Includes probability-aware confidence scaling:
+  - YES at 95% market prob → already priced in → confidence discounted
+  - NO at 10% market prob → already priced in → confidence discounted
+  - SKIP confidence halved (low-signal)
+
+### Changes to Existing Files
+
+- **`agents/listener.py`** — `_modal_evaluate()` now calls `trademaxxer-agents-fast` / `FastMarketAgent.evaluate_batch()` with a single-item batch instead of `trademaxxer-agents` / `MarketAgent.evaluate()`. No Groq, no secrets needed.
+
+- **`main.py`** — Warmup now calls the NLI agent's `evaluate_batch` endpoint. Everything else (Redis, listeners, mock mode) unchanged.
+
+### Obstacles
+
+1. **ONNX export rabbit hole** — Initially tried exporting to ONNX + INT8 quantization for maximum speed. Hit HuggingFace cache permission errors in sandbox. Realized the complexity wasn't worth it: PyTorch inference on CPU for a 22M param model is already ~10ms. Scrapped ONNX, load straight from HuggingFace.
+
+2. **Modal image build order** — `add_local_python_source()` must come last in the Modal image chain. Placing `.run_commands()` after it throws an error because Modal mounts local sources at runtime, not build time. Fixed by reordering: `pip_install → run_commands → add_local_python_source`.
+
+3. **`.env` parsing** — The `.env` file had `========` header lines (not comments). `python-dotenv` couldn't parse them, so env vars never loaded. Changed to `#` prefixed comments.
+
+4. **`python-dotenv` not installed** — The `try/except ImportError: pass` in `main.py` silently skipped loading `.env` entirely. Installed `python-dotenv` in venv.
+
+5. **Groq rate limits** — The original trigger for this migration. Free tier: 6000 TPM. With 4 markets × 2+ stories/sec × ~280 tokens/call = way over budget. NLI model has zero external API calls, zero rate limits.
+
+### Architecture Decisions
+
+1. **HuggingFace direct load over ONNX** — Trading ~5ms of inference time for zero export complexity. The model is baked into the Modal image, so cold starts don't include a download. Warm inference is ~10ms vs ~5ms ONNX — not worth the maintenance burden.
+
+2. **Keep Redis pub/sub** — Considered replacing Redis with in-process queues for lower latency. Kept Redis because it cleanly decouples the news tagger from agent listeners, supports future multi-process deployment, and the overhead is small (~1-2ms local).
+
+3. **Batched endpoint** — `evaluate_batch()` accepts a list so a single Modal RPC can evaluate all markets. Currently each listener sends a 1-item batch, but the architecture is ready for true batching if we add a central dispatcher later.
+
+---
+
+## Session 5 — Launch Script (Feb 28, 2026)
+
+### Goal
+
+One command to start everything: Redis, server, frontend.
+
+### Implementation
+
+Created `start.sh` at project root:
+
+```bash
+./start.sh           # live: Redis + DBNews + Modal NLI agents
+./start.sh --mock    # mock: fake news + fake agents (no Redis/Modal)
+```
+
+- Starts Redis (skipped in mock mode), Python server, and Vite dev server
+- Traps SIGINT/SIGTERM to clean up all child processes
+- Prints PIDs and dashboard URL
+- Ctrl-C stops everything
+
+---
+
 ## What's Next
 
+- [ ] True batching: central dispatcher collects all markets per story, single Modal RPC
+- [ ] `--local-inference` flag: run NLI model locally on VPS when Modal RPC overhead exceeds budget
+- [ ] Per-stage timing instrumentation (tagger → Redis → Modal → decision)
 - [ ] Market registry in Redis (replace hardcoded `MarketConfig`)
 - [ ] Decision queue (decouple agents from executor)
 - [ ] Solana executor — read decisions, fire trades via proprietary API
 - [ ] Position monitor — resolution, edge compression, contradicting news, time decay
-- [ ] Prompt v4 — structured few-shot examples for borderline cases
-- [ ] Multi-market live test (spawn N listeners, measure parallel throughput)
 - [ ] P&L tracking from real trades (replace simulated P&L)

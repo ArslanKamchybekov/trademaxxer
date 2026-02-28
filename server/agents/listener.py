@@ -151,16 +151,25 @@ class AgentListener:
 
 async def _modal_evaluate(story: StoryPayload, market: MarketConfig) -> Decision:
     """
-    Default evaluate_fn: calls the deployed Modal MarketAgent.
+    Default evaluate_fn: calls the deployed FastMarketAgent (NLI).
 
-    Requires `modal` installed on the VPS and a deployed trademaxxer-agents app.
+    Sends a single-item batch and extracts the result.
     """
     import modal
 
-    AgentCls = modal.Cls.from_name("trademaxxer-agents", "MarketAgent")
-    agent = AgentCls()
-    result = await agent.evaluate.remote.aio(story.to_dict(), market.to_dict())
-    return Decision.from_dict(result)
+    Cls = modal.Cls.from_name("trademaxxer-agents-fast", "FastMarketAgent")
+    agent = Cls()
+
+    batch = [{
+        "headline": story.headline,
+        "question": market.question,
+        "probability": market.current_probability,
+        "market_address": market.address,
+        "story_id": story.id,
+    }]
+
+    results = await agent.evaluate_batch.remote.aio(batch)
+    return Decision.from_dict(results[0])
 
 
 async def run_all_listeners(
