@@ -4,3 +4,4 @@ redis[asyncio]>=5.0
 # Testing
 pytest>=8.0
 pytest-asyncio>=0.23
+fakeredis>=2.0  # in-process Redis for smoke tests (no server needed)
