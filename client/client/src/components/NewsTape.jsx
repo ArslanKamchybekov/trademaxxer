@@ -27,7 +27,6 @@ const SOURCE_COLOR = {
   RSS: "text-yellow-400",
 }
 
-
 function formatTime(iso) {
   if (!iso) return "--:--:--"
   try {
@@ -91,8 +90,6 @@ function NewsDetail({ item }) {
   const mediaUrl = item.mediaUrl || ""
   const avatar = item.sourceAvatar || ""
   const srcDesc = item.sourceDescription || ""
-  const sentiment = item.sentiment || "neutral"
-  const sentScore = item.sentimentScore != null ? item.sentimentScore : null
 
   const { imageUrls } = extractUrls(rawBody)
   const allImages = [...new Set([mediaUrl, ...imageUrls].filter(Boolean))]
@@ -166,15 +163,6 @@ function NewsDetail({ item }) {
 
       {/* Meta row */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-        <span className={`${SENTIMENT_COLOR[sentiment]} text-[8px]`}>
-          {sentiment.toUpperCase()}
-          {sentScore != null && (
-            <span className="text-muted-foreground/50 ml-0.5">
-              ({sentScore > 0 ? "+" : ""}{sentScore.toFixed(2)})
-            </span>
-          )}
-        </span>
-
         {tickers.length > 0 && tickers.map((t) => (
           <span key={t} className="text-[8px] font-bold text-blue-400/80">
             ${t}
@@ -207,21 +195,8 @@ function NewsRow({ item, idx, isExpanded, onToggle }) {
         <span className="tabular shrink-0 text-[9px] text-muted-foreground/60 w-4 text-right">
           {idx + 1}
         </span>
-<<<<<<< Updated upstream
         <span className="tabular shrink-0 text-muted-foreground">
           {formatTime(item.timestamp)}
-=======
-      )}
-      {urg.text && (
-        <span className={`shrink-0 font-bold ${urg.color}`}>{urg.text}</span>
-      )}
-      <span className="min-w-0 flex-1 truncate text-foreground">
-        {item.headline}
-      </span>
-      {cats.map((c) => (
-        <span key={c} className="shrink-0 text-[8px] uppercase text-amber-dim">
-          {c}
->>>>>>> Stashed changes
         </span>
         {srcAbbr && (
           <span className={`shrink-0 text-[8px] font-bold ${SOURCE_COLOR[srcAbbr] || "text-blue-400"}`} title={srcHandle || srcAbbr}>
@@ -233,9 +208,6 @@ function NewsRow({ item, idx, isExpanded, onToggle }) {
         )}
         <span className="min-w-0 flex-1 truncate text-foreground">
           {item.headline}
-        </span>
-        <span className={`shrink-0 ${sentColor}`}>
-          {item.sentiment === "bullish" ? "+" : item.sentiment === "bearish" ? "−" : "~"}
         </span>
         {cats.map((c) => (
           <span key={c} className="shrink-0 text-[8px] uppercase text-amber-dim">
