@@ -138,26 +138,22 @@ class Settings:
 
 
 def _load_settings() -> Settings:
-    """Load all settings from environment variables."""
+    """Load all settings from environment variables.
 
-    # DBNews Configuration
+    DBNews credentials are optional — missing values are allowed so that
+    --mock mode works without a .env file.  The live feed path in main.py
+    will fail later if it actually tries to connect without credentials.
+    """
     dbnews = DBNewsConfig(
-        username=_require_env(
-            "DBNEWS_USERNAME",
-            "DBNews API username for WebSocket authentication"
-        ),
-        password=_require_env(
-            "DBNEWS_PASSWORD",
-            "DBNews API password for WebSocket authentication"
-        ),
+        username=_optional_env("DBNEWS_USERNAME", ""),
+        password=_optional_env("DBNEWS_PASSWORD", ""),
         ws_base_url=_optional_env("DBNEWS_WS_URL", "wss://dbws.io"),
     )
 
-    # WebSocket Server Configuration (no JWT needed for simple streaming)
     websocket_server = WebSocketServerConfig(
         host=_optional_env("WS_HOST", "0.0.0.0"),
         port=_optional_env_int("WS_PORT", 8765),
-        jwt=None,  # No authentication needed for streaming
+        jwt=None,
     )
 
     return Settings(
@@ -166,9 +162,4 @@ def _load_settings() -> Settings:
     )
 
 
-# Load settings at module import time (fail-fast)
-try:
-    settings = _load_settings()
-except ConfigurationError as e:
-    print(f"Configuration Error:\n{e}", file=sys.stderr)
-    sys.exit(1)
+settings = _load_settings()

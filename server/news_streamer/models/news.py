@@ -48,27 +48,39 @@ class Urgency(str, Enum):
 
 
 class Category(str, Enum):
-    """News category classification."""
+    """News category classification — mirrors Kalshi event categories."""
 
     POLITICS = "politics"
+    SPORTS = "sports"
+    CULTURE = "culture"
     CRYPTO = "crypto"
-    STOCKS = "stocks"
-    MACRO = "macro"
-    COMMODITIES = "commodities"
-    FOREX = "forex"
-    EARNINGS = "earnings"
-    REGULATION = "regulation"
-    GEOPOLITICS = "geopolitics"
-    ECONOMIC_DATA = "economic_data"
+    CLIMATE = "climate"
+    ECONOMICS = "economics"
+    MENTIONS = "mentions"
+    COMPANIES = "companies"
+    FINANCIALS = "financials"
+    TECH_SCIENCE = "tech_science"
 
     @classmethod
     def from_string(cls, value: str) -> Optional["Category"]:
         """Convert string to Category, returning None if not found."""
-        value_lower = value.lower()
+        v = value.lower().replace(" & ", "_").replace(" ", "_")
         for member in cls:
-            if member.value == value_lower:
+            if member.value == v:
                 return member
-        return None
+        _ALIASES = {
+            "macro": cls.ECONOMICS,
+            "economic_data": cls.ECONOMICS,
+            "geopolitics": cls.POLITICS,
+            "regulation": cls.POLITICS,
+            "stocks": cls.FINANCIALS,
+            "earnings": cls.FINANCIALS,
+            "forex": cls.FINANCIALS,
+            "commodities": cls.FINANCIALS,
+            "tech": cls.TECH_SCIENCE,
+            "science": cls.TECH_SCIENCE,
+        }
+        return _ALIASES.get(v)
 
 
 @dataclass(frozen=True)

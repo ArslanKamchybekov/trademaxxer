@@ -171,32 +171,75 @@ class NewsTagger:
 
         return tuple(sorted_tickers)
 
+    _CRYPTO_TICKERS = frozenset({
+        "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "AVAX",
+        "LINK", "MATIC", "UNI", "ATOM", "LTC", "BCH", "XLM",
+    })
+
     def _classify_categories(self, news: RawNewsItem) -> tuple[Category, ...]:
-        """Classify news into categories."""
+        """Classify news into Kalshi-aligned categories."""
         categories: set[Category] = set()
 
-        # Use DBNews pre-tagged categories as hints
         if self._config.use_dbnews_hints and news.pre_tagged_categories:
             for cat_str in news.pre_tagged_categories:
                 cat = Category.from_string(cat_str)
                 if cat:
                     categories.add(cat)
 
-        # Check economic event type
         if news.economic_event_type:
-            categories.add(Category.ECONOMIC_DATA)
+            categories.add(Category.ECONOMICS)
 
-        # Infer from tickers if no categories found
+        if not categories:
+            categories |= self._classify_from_text(news.headline)
+
         if not categories and news.pre_tagged_tickers:
-            # Check if any tickers are known crypto
-            crypto_tickers = {
-                "BTC", "ETH", "SOL", "XRP", "DOGE", "ADA", "DOT", "AVAX",
-                "LINK", "MATIC", "UNI", "ATOM", "LTC", "BCH", "XLM",
-            }
-            if any(t.upper() in crypto_tickers for t in news.pre_tagged_tickers):
+            if any(t.upper() in self._CRYPTO_TICKERS for t in news.pre_tagged_tickers):
                 categories.add(Category.CRYPTO)
 
         return tuple(sorted(categories, key=lambda c: c.value))
+
+    @staticmethod
+    def _classify_from_text(text: str) -> set[Category]:
+        """Keyword fallback when DBNews hints are absent."""
+        t = text.lower()
+        cats: set[Category] = set()
+
+        if any(w in t for w in [
+            "election", "president", "congress", "senate", "trump", "biden",
+            "sanctions", "war", "military", "nato", "ceasefire",
+        ]):
+            cats.add(Category.POLITICS)
+        if any(w in t for w in [
+            "fed ", "inflation", "cpi", "gdp", "unemployment", "rate cut",
+            "rate hike", "fomc", "recession", "tariff", "jobs report",
+        ]):
+            cats.add(Category.ECONOMICS)
+        if any(w in t for w in [
+            "bitcoin", "btc", "ethereum", "eth", "crypto", "solana",
+            "stablecoin", "defi",
+        ]):
+            cats.add(Category.CRYPTO)
+        if any(w in t for w in [
+            "s&p", "dow", "nasdaq", "earnings", "stock", "bond", "yield",
+            "oil", "gold", "crude",
+        ]):
+            cats.add(Category.FINANCIALS)
+        if any(w in t for w in [
+            "apple", "google", "microsoft", "amazon", "tesla", "nvidia",
+            "meta", "openai",
+        ]):
+            cats.add(Category.COMPANIES)
+        if any(w in t for w in [
+            " ai ", "artificial intelligence", "quantum", "semiconductor",
+            "fda", "vaccine", "launch",
+        ]):
+            cats.add(Category.TECH_SCIENCE)
+        if any(w in t for w in [
+            "climate", "hurricane", "wildfire", "emission", "drought",
+        ]):
+            cats.add(Category.CLIMATE)
+
+        return cats
 
     def _analyze_sentiment(self, news: RawNewsItem) -> tuple[Sentiment, float]:
         """

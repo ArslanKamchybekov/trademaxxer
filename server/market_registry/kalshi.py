@@ -227,63 +227,71 @@ class KalshiMarketRegistry:
         )
 
     def _extract_tags_from_question(self, question: str) -> tuple[str, ...]:
-        """Extract TradeMaxxer tags from Kalshi market question."""
+        """Map market question to Kalshi-aligned categories."""
 
-        question_lower = question.lower()
-        tags = set()
+        q = question.lower()
+        tags: set[str] = set()
 
-        # Macro/Economic indicators
-        if any(word in question_lower for word in [
-            "fed", "federal reserve", "interest rate", "rates", "inflation",
-            "gdp", "recession", "unemployment", "jobs", "cpi", "ppi", "fomc"
-        ]):
-            tags.update(["macro", "economic_data"])
-
-        # Geopolitical events
-        if any(word in question_lower for word in [
-            "war", "invasion", "conflict", "military", "sanctions", "nato",
-            "china", "russia", "iran", "ukraine", "taiwan"
-        ]):
-            tags.add("geopolitics")
-
-        # Political events
-        if any(word in question_lower for word in [
-            "election", "president", "congress", "senate", "vote", "political",
-            "biden", "trump", "harris"
+        if any(w in q for w in [
+            "election", "president", "congress", "senate", "vote", "biden",
+            "trump", "harris", "political", "government", "executive order",
+            "sanctions", "war", "invasion", "conflict", "military", "nato",
+            "geopolit", "ceasefire", "diplomacy",
         ]):
             tags.add("politics")
 
-        # Commodities
-        if any(word in question_lower for word in [
-            "oil", "gas", "gold", "silver", "copper", "wheat", "corn",
-            "crude", "energy", "opec"
+        if any(w in q for w in [
+            "fed", "federal reserve", "interest rate", "inflation", "gdp",
+            "recession", "unemployment", "jobs", "cpi", "ppi", "fomc",
+            "tariff", "trade deal", "debt ceiling", "treasury",
         ]):
-            tags.add("commodities")
+            tags.add("economics")
 
-        # Crypto
-        if any(word in question_lower for word in [
-            "bitcoin", "btc", "ethereum", "eth", "crypto", "cryptocurrency"
+        if any(w in q for w in [
+            "bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol",
+            "stablecoin", "defi", "nft",
         ]):
             tags.add("crypto")
 
-        # Tech/Earnings
-        if any(word in question_lower for word in [
+        if any(w in q for w in [
+            "s&p", "dow", "nasdaq", "stock", "ipo", "bond", "yield",
+            "earnings", "revenue", "oil", "gold", "crude", "commodity",
+            "forex", "dollar",
+        ]):
+            tags.add("financials")
+
+        if any(w in q for w in [
             "apple", "google", "microsoft", "amazon", "tesla", "nvidia",
-            "meta", "twitter", "facebook", "ai", "artificial intelligence",
-            "earnings", "revenue", "stock", "ipo"
+            "meta", "openai", "spacex",
         ]):
-            tags.add("tech")
+            tags.add("companies")
 
-        # Regulation
-        if any(word in question_lower for word in [
-            "regulation", "policy", "law", "bill", "tax", "tariff", "trade",
-            "supreme court", "legal", "lawsuit", "investigation"
+        if any(w in q for w in [
+            "ai", "artificial intelligence", "quantum", "chip", "semiconductor",
+            "fda", "vaccine", "space", "launch", "nuclear",
         ]):
-            tags.add("regulation")
+            tags.add("tech_science")
 
-        # Default fallback
+        if any(w in q for w in [
+            "climate", "carbon", "emission", "hurricane", "wildfire",
+            "temperature", "drought", "flood", "epa",
+        ]):
+            tags.add("climate")
+
+        if any(w in q for w in [
+            "oscar", "grammy", "emmy", "box office", "celebrity",
+            "entertainment", "movie", "album",
+        ]):
+            tags.add("culture")
+
+        if any(w in q for w in [
+            "nba", "nfl", "mlb", "nhl", "fifa", "super bowl", "world cup",
+            "championship", "playoff", "tournament",
+        ]):
+            tags.add("sports")
+
         if not tags:
-            tags.add("general")
+            tags.add("mentions")
 
         return tuple(sorted(tags))
 

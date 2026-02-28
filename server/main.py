@@ -84,6 +84,11 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
     dbnews_client = None
     if not use_mock:
+        if not settings.dbnews.username or not settings.dbnews.password:
+            raise RuntimeError(
+                "DBNEWS_USERNAME and DBNEWS_PASSWORD are required for live mode. "
+                "Set them in .env or use --mock."
+            )
         from news_streamer.dbnews_client import DBNewsWebSocketClient
         dbnews_client = DBNewsWebSocketClient(settings.dbnews.ws_url)
 
@@ -110,10 +115,16 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         logger.error(f"Failed to load markets from Kalshi: {e}")
         logger.warning("Server will run without markets - check API connectivity")
 
+    # ── Demo contracts (prepend, auto-enabled) ──────────────────
+    from demo_markets import DEMO_CONTRACTS
+    demo_addrs = {m.address for m in DEMO_CONTRACTS}
+    markets = list(DEMO_CONTRACTS) + [m for m in markets if m.address not in demo_addrs]
+    logger.info(f"Injected {len(DEMO_CONTRACTS)} demo contracts (auto-enabled)")
+
     market_by_addr = {m.address: m for m in markets}
 
-    # ── Market state (all OFF by default — user enables via UI) ──
-    enabled_markets: set[str] = set()
+    # ── Market state (demo ON by default, rest OFF) ───────────────
+    enabled_markets: set[str] = set(demo_addrs)
 
     def _markets_state_payload() -> dict:
         payload = {
@@ -211,12 +222,12 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     def _match_markets(story: StoryPayload) -> list[MarketConfig]:
         """Return enabled markets whose tags overlap with the story."""
         story_tags = set(story.tags)
-        if story_tags:
-            return [
-                m for m in markets
-                if m.address in enabled_markets and story_tags & set(m.tags)
-            ]
-        return [m for m in markets if m.address in enabled_markets]
+        if not story_tags:
+            return []
+        return [
+            m for m in markets
+            if m.address in enabled_markets and story_tags & set(m.tags)
+        ]
 
     async def _eval_and_broadcast(story: StoryPayload) -> None:
         """Tag-filter enabled markets, fan-out Groq evals, broadcast results."""
@@ -340,6 +351,7 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     )
 
     mock_task: asyncio.Task | None = None
+    demo_task: asyncio.Task | None = None
 
     if use_mock and not use_local:
         logger.info("Mock mode — agents run inline (no Groq)")
@@ -359,18 +371,26 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         await dbnews_client.connect()
         logger.info(f"Connected to DBNews feed — pipeline is live ({infer_mode})")
 
+    # Start demo headline injector alongside the real/mock feed
+    from demo_markets import run_demo_injector
+    demo_task = asyncio.create_task(
+        run_demo_injector(on_news, interval_range=(8.0, 25.0), shutdown=shutdown_event)
+    )
+    logger.info("Demo headline injector started")
+
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
 
     # ── Teardown ───────────────────────────────────────────────────
     logger.info("Shutting down...")
 
-    if mock_task and not mock_task.done():
-        mock_task.cancel()
-        try:
-            await mock_task
-        except asyncio.CancelledError:
-            pass
+    for task in (mock_task, demo_task):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     await ws_server.stop()
 
