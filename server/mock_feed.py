@@ -1,8 +1,9 @@
 """
-Mock news feed for testing when DBNews is unavailable.
+Mock news feed and agent for testing when DBNews / Modal are unavailable.
 
 Generates realistic financial/geopolitical headlines and fires them
-through the same on_news callback as the real feed.
+through the same on_news callback as the real feed. The mock evaluator
+returns random decisions with simulated latency.
 
 Usage:
     python main.py --mock
@@ -15,6 +16,7 @@ import uuid
 from datetime import datetime, timezone
 
 from news_streamer.models.news import RawNewsItem, SourceType
+from agents.schemas import Decision, MarketConfig, StoryPayload
 
 HEADLINES: list[tuple[str, str, tuple[str, ...]]] = [
     # (headline, body, pre_tagged_categories)
@@ -170,3 +172,65 @@ async def run_mock_feed(
                 await asyncio.sleep(delay)
         except asyncio.TimeoutError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Mock agent evaluator — replaces Modal + Groq with random decisions
+# ---------------------------------------------------------------------------
+
+MOCK_REASONING = {
+    "YES": [
+        "Direct positive signal for this market",
+        "Strong correlation with market thesis",
+        "Breaking event supports YES outcome",
+        "Historical precedent favors YES",
+        "Multiple confirming indicators",
+        "Market-moving event, high confidence YES",
+    ],
+    "NO": [
+        "News contradicts market thesis",
+        "Negative signal for YES outcome",
+        "Counter-evidence to current probability",
+        "Event reduces likelihood of YES resolution",
+        "Bearish indicator for this market",
+    ],
+    "SKIP": [
+        "Irrelevant to this market",
+        "No material impact on outcome",
+        "Tangentially related, insufficient signal",
+        "Noise — no actionable information",
+        "Outside scope of market question",
+    ],
+}
+
+
+async def mock_evaluate(story: StoryPayload, market: MarketConfig) -> Decision:
+    """
+    Drop-in replacement for _modal_evaluate. Returns a random decision
+    with simulated Groq-like latency (150–400ms).
+    """
+    latency = random.uniform(150, 400)
+    await asyncio.sleep(latency / 1000)
+
+    roll = random.random()
+    if roll < 0.35:
+        action = "YES"
+        confidence = round(random.uniform(0.55, 0.95), 2)
+    elif roll < 0.65:
+        action = "NO"
+        confidence = round(random.uniform(0.50, 0.90), 2)
+    else:
+        action = "SKIP"
+        confidence = round(random.uniform(0.10, 0.50), 2)
+
+    reasoning = random.choice(MOCK_REASONING[action])
+
+    return Decision(
+        action=action,
+        confidence=confidence,
+        reasoning=reasoning,
+        market_address=market.address,
+        story_id=story.id,
+        latency_ms=round(latency, 1),
+        prompt_version="mock",
+    )

@@ -4,6 +4,45 @@ const ACTION_COLOR = {
   SKIP: "text-skip",
 }
 
+function MicroSparkline({ values, color }) {
+  if (values.length < 2) return <span className="text-[9px] text-muted-foreground">—</span>
+  const max = Math.max(...values, 1)
+  const min = Math.min(...values, 0)
+  const range = max - min || 1
+  const w = 36
+  const h = 10
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * w
+    const y = h - ((v - min) / range) * h
+    return `${x},${y}`
+  }).join(" ")
+
+  return (
+    <svg width={w} height={h} className="inline-block">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1" />
+    </svg>
+  )
+}
+
+function SignalStrength({ total }) {
+  const bars = [1, 3, 6, 10, 16]
+  const level = bars.filter((b) => total >= b).length
+  return (
+    <span className="inline-flex items-end gap-[1px]">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <span
+          key={i}
+          className="inline-block w-[2px]"
+          style={{
+            height: `${4 + i * 2}px`,
+            backgroundColor: i < level ? "#ff9800" : "#1e1e1e",
+          }}
+        />
+      ))}
+    </span>
+  )
+}
+
 export default function MarketGrid({ markets, marketStats }) {
   return (
     <div className="flex h-full flex-col">
@@ -11,41 +50,63 @@ export default function MarketGrid({ markets, marketStats }) {
         <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
           Markets
         </span>
+        <span className="ml-2 tabular text-[10px] text-muted-foreground">
+          {markets.length} active
+        </span>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <table className="w-full text-[11px]">
+        <table className="w-full text-[10px]">
           <thead>
-            <tr className="border-b border-border text-left text-[9px] uppercase text-muted-foreground">
-              <th className="px-2 py-1 font-normal">Market</th>
-              <th className="px-2 py-1 font-normal text-right">Prob</th>
-              <th className="px-2 py-1 font-normal text-center">Y</th>
-              <th className="px-2 py-1 font-normal text-center">N</th>
-              <th className="px-2 py-1 font-normal text-center">S</th>
-              <th className="px-2 py-1 font-normal text-right">Last</th>
+            <tr className="border-b border-border text-left text-[8px] uppercase text-muted-foreground">
+              <th className="px-1.5 py-0.5 font-normal">Market</th>
+              <th className="px-1.5 py-0.5 font-normal text-right">Prob</th>
+              <th className="px-1.5 py-0.5 font-normal text-center">Sig</th>
+              <th className="px-1.5 py-0.5 font-normal text-center">Y</th>
+              <th className="px-1.5 py-0.5 font-normal text-center">N</th>
+              <th className="px-1.5 py-0.5 font-normal text-center">S</th>
+              <th className="px-1.5 py-0.5 font-normal text-right">Conf</th>
+              <th className="px-1.5 py-0.5 font-normal text-center">Lat</th>
+              <th className="px-1.5 py-0.5 font-normal text-right">Last</th>
             </tr>
           </thead>
           <tbody>
             {markets.map((m) => {
-              const s = marketStats[m.address] || { yes: 0, no: 0, skip: 0, lastAction: null }
+              const s = marketStats[m.address] || {
+                yes: 0, no: 0, skip: 0, lastAction: null,
+                avgConf: 0, totalSignals: 0, latencies: [],
+              }
               const lastColor = ACTION_COLOR[s.lastAction] || "text-muted-foreground"
+              const total = s.yes + s.no + s.skip
               return (
                 <tr key={m.address} className="border-b border-border/30 hover:bg-accent/30">
-                  <td className="max-w-[200px] truncate px-2 py-1 text-foreground/90">
+                  <td className="max-w-[180px] truncate px-1.5 py-1 text-foreground/90">
                     {m.question}
                   </td>
-                  <td className="tabular whitespace-nowrap px-2 py-1 text-right text-amber">
+                  <td className="tabular whitespace-nowrap px-1.5 py-1 text-right text-amber">
                     {(m.current_probability * 100).toFixed(0)}%
                   </td>
-                  <td className="tabular px-2 py-1 text-center text-yes">
+                  <td className="px-1.5 py-1 text-center">
+                    <SignalStrength total={total} />
+                  </td>
+                  <td className="tabular px-1.5 py-1 text-center text-yes">
                     {s.yes || "·"}
                   </td>
-                  <td className="tabular px-2 py-1 text-center text-no">
+                  <td className="tabular px-1.5 py-1 text-center text-no">
                     {s.no || "·"}
                   </td>
-                  <td className="tabular px-2 py-1 text-center text-muted-foreground">
+                  <td className="tabular px-1.5 py-1 text-center text-muted-foreground">
                     {s.skip || "·"}
                   </td>
-                  <td className={`tabular px-2 py-1 text-right font-bold ${lastColor}`}>
+                  <td className="tabular px-1.5 py-1 text-right text-amber-dim">
+                    {s.avgConf ? `${(s.avgConf * 100).toFixed(0)}%` : "—"}
+                  </td>
+                  <td className="px-1.5 py-1 text-center">
+                    <MicroSparkline
+                      values={s.latencies || []}
+                      color="#ff9800"
+                    />
+                  </td>
+                  <td className={`tabular px-1.5 py-1 text-right font-bold ${lastColor}`}>
                     {s.lastAction || "—"}
                   </td>
                 </tr>

@@ -9,8 +9,8 @@ Runs all services in a single async event loop:
 
 Usage:
     cd server
-    python main.py          # live DBNews feed
-    python main.py --mock   # mock headlines (no DBNews needed)
+    python main.py                # live: DBNews + Redis + Modal
+    python main.py --mock         # mock: fake headlines + fake agents (no Redis/Modal)
 """
 from __future__ import annotations
 
@@ -125,6 +125,40 @@ async def run(*, use_mock: bool = False) -> None:
             except Exception as e:
                 logger.error(f"Redis publish failed: {e}")
 
+        # In mock mode, run agents inline (no Redis/Modal needed)
+        if use_mock and tagged is not None:
+            story = StoryPayload(
+                id=news.id,
+                headline=news.headline,
+                body=getattr(news, "body", ""),
+                tags=tuple(tagged.categories) if tagged.categories else (),
+                source=getattr(news, "source_handle", ""),
+                timestamp=datetime.now(timezone.utc),
+            )
+            for market in test_markets:
+                asyncio.create_task(_mock_eval_and_broadcast(story, market))
+
+    # ── Mock agent evaluator (inline, no Redis/Modal) ─────────────
+
+    async def _mock_eval_and_broadcast(story: StoryPayload, market: MarketConfig) -> None:
+        from mock_feed import mock_evaluate
+
+        try:
+            decision = await mock_evaluate(story, market)
+        except Exception as e:
+            logger.error(f"Mock eval failed: {e}")
+            return
+
+        logger.info(
+            f"[{decision.action}] {market.address[:16]}… "
+            f"conf={decision.confidence:.2f} ({decision.latency_ms:.0f}ms) "
+            f"| {story.headline[:60]}"
+        )
+        payload = decision.to_dict()
+        payload["headline"] = story.headline
+        payload["market_question"] = market.question
+        await ws_server.broadcast_decision(payload)
+
     # ── Modal warm-up ──────────────────────────────────────────────
 
     async def _warmup_modal(market: MarketConfig) -> None:
@@ -167,43 +201,63 @@ async def run(*, use_mock: bool = False) -> None:
         f"ws://{settings.websocket_server.host}:{settings.websocket_server.port}"
     )
 
-    # Connect to Redis
+    # Connect to Redis (skip in mock mode)
     redis_live = False
-    try:
-        await publisher.connect()
-        redis_live = True
-        logger.info(f"NewsPublisher connected to Redis at {REDIS_URL}")
-    except Exception as e:
-        logger.error(f"Failed to connect NewsPublisher to Redis: {e}")
-        logger.error("Agent listeners will NOT start — no Redis connection")
-
-    # Warm up Modal container
-    await _warmup_modal(test_markets[0])
-
-    # Start agent listeners (subscribe to Redis channels → Modal)
     listener_tasks: list[asyncio.Task] = []
-    if redis_live:
-        from agents.listener import run_all_listeners
+    mock_task: asyncio.Task | None = None
 
-        async def _broadcast_decision(data):
-            await ws_server.broadcast_decision(data)
+    if use_mock:
+        logger.info("Mock mode — skipping Redis + Modal (agents run inline)")
+    else:
+        try:
+            await publisher.connect()
+            redis_live = True
+            logger.info(f"NewsPublisher connected to Redis at {REDIS_URL}")
+        except Exception as e:
+            logger.error(f"Failed to connect NewsPublisher to Redis: {e}")
+            logger.error("Agent listeners will NOT start — no Redis connection")
 
-        listener_tasks = await run_all_listeners(
-            markets=test_markets,
-            redis_url=REDIS_URL,
-            on_decision=_broadcast_decision,
+        # Warm up Modal container
+        await _warmup_modal(test_markets[0])
+
+        # Start agent listeners (subscribe to Redis channels → Modal)
+        if redis_live:
+            from agents.listener import run_all_listeners
+
+            async def _broadcast_decision(data):
+                await ws_server.broadcast_decision(data)
+
+            listener_tasks = await run_all_listeners(
+                markets=test_markets,
+                redis_url=REDIS_URL,
+                on_decision=_broadcast_decision,
+            )
+            logger.info(f"{len(listener_tasks)} agent listener(s) running")
+
+    # Connect to news source
+    if use_mock:
+        from mock_feed import run_mock_feed
+
+        mock_task = asyncio.create_task(
+            run_mock_feed(on_news, interval_range=(1.0, 4.0), shutdown=shutdown_event)
         )
-        logger.info(f"{len(listener_tasks)} agent listener(s) running")
-
-    # Connect to DBNews — news starts flowing
-    await dbnews_client.connect()
-    logger.info("Connected to DBNews feed - pipeline is live")
+        logger.info("Mock news feed started — decisions will be generated inline")
+    else:
+        await dbnews_client.connect()
+        logger.info("Connected to DBNews feed — pipeline is live")
 
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
 
     # ── Teardown ───────────────────────────────────────────────────
     logger.info("Shutting down...")
+
+    if mock_task and not mock_task.done():
+        mock_task.cancel()
+        try:
+            await mock_task
+        except asyncio.CancelledError:
+            pass
 
     for task in listener_tasks:
         task.cancel()
@@ -215,17 +269,26 @@ async def run(*, use_mock: bool = False) -> None:
         await publisher.close()
 
     await ws_server.stop()
-    await dbnews_client.disconnect()
 
-    stats = dbnews_client.get_stats()
-    ws_stats = ws_server.get_stats()
-    tagger_stats = tagger.stats
-    logger.info(
-        f"Final — messages: {stats.get('messages_received', 0)}, "
-        f"clients served: {ws_stats.total_connections}, "
-        f"tagged: {tagger_stats.items_tagged}, "
-        f"tag failures: {tagger_stats.items_failed}"
-    )
+    if dbnews_client is not None:
+        await dbnews_client.disconnect()
+        stats = dbnews_client.get_stats()
+        ws_stats = ws_server.get_stats()
+        tagger_stats = tagger.stats
+        logger.info(
+            f"Final — messages: {stats.get('messages_received', 0)}, "
+            f"clients served: {ws_stats.total_connections}, "
+            f"tagged: {tagger_stats.items_tagged}, "
+            f"tag failures: {tagger_stats.items_failed}"
+        )
+    else:
+        ws_stats = ws_server.get_stats()
+        tagger_stats = tagger.stats
+        logger.info(
+            f"Final (mock) — messages: {message_count}, "
+            f"clients served: {ws_stats.total_connections}, "
+            f"tagged: {tagger_stats.items_tagged}"
+        )
 
 
 if __name__ == "__main__":

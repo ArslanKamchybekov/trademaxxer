@@ -37,7 +37,7 @@ body {
   background-color: var(--color-background);
   color: var(--color-foreground);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -46,14 +46,16 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 4px;
+  width: 3px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #333;
+  background: #2a2a2a;
 }
+
+/* ── Flash animations ──────────────────────────────── */
 
 @keyframes flash-in {
   0% { background-color: rgba(255, 152, 0, 0.15); }
@@ -75,9 +77,53 @@ body {
   50% { opacity: 0.3; }
 }
 
-.flash-news { animation: flash-in 1.5s ease-out; }
-.flash-decision-yes { animation: flash-yes 1.5s ease-out; }
-.flash-decision-no { animation: flash-no 1.5s ease-out; }
+.flash-news { animation: flash-in 1.2s ease-out; }
+.flash-decision-yes { animation: flash-yes 1.2s ease-out; }
+.flash-decision-no { animation: flash-no 1.2s ease-out; }
 .blink { animation: blink 1s step-end infinite; }
 
+/* ── Ticker tape animation ─────────────────────────── */
+
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.ticker-scroll {
+  animation: ticker-scroll 30s linear infinite;
+}
+
+.ticker-scroll:hover {
+  animation-play-state: paused;
+}
+
+@keyframes ticker-flash {
+  0% { opacity: 1; }
+  50% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+.ticker-item {
+  animation: ticker-flash 3s ease-in-out infinite;
+}
+
+/* ── Tabular figures ───────────────────────────────── */
+
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* ── Scanline effect (subtle) ──────────────────────── */
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.03) 2px,
+    rgba(0, 0, 0, 0.03) 4px
+  );
+}

@@ -1,10 +1,16 @@
 import useWebSocket from "@/hooks/useWebSocket"
 import TerminalHeader from "@/components/TerminalHeader"
+import TickerTape from "@/components/TickerTape"
 import NewsTape from "@/components/NewsTape"
 import DecisionFeed from "@/components/DecisionFeed"
 import MarketGrid from "@/components/MarketGrid"
+import PositionBook from "@/components/PositionBook"
 import LatencyChart from "@/components/LatencyChart"
+import LatencyStats from "@/components/LatencyStats"
+import ThroughputChart from "@/components/ThroughputChart"
 import DecisionChart from "@/components/DecisionChart"
+import ConfidenceHistogram from "@/components/ConfidenceHistogram"
+import TagHeatmap from "@/components/TagHeatmap"
 import SystemBar from "@/components/SystemBar"
 
 const MARKETS = [
@@ -35,45 +41,91 @@ const MARKETS = [
 ]
 
 export default function App() {
-  const { status, news, decisions, latencyData, stats, marketStats } = useWebSocket()
+  const {
+    status, news, decisions,
+    latencyData, throughputData, velocityData,
+    stats, marketStats, tagStats, sessionStart,
+  } = useWebSocket()
 
   return (
     <div className="flex h-screen flex-col bg-background">
-      <TerminalHeader status={status} stats={stats} />
+      {/* Header row */}
+      <TerminalHeader
+        status={status}
+        stats={stats}
+        sessionStart={sessionStart}
+        throughputData={throughputData}
+      />
 
-      {/* Main grid: 2 cols x 2 rows */}
+      {/* Ticker tape */}
+      <TickerTape decisions={decisions} />
+
+      {/* Main 3-column layout */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left column */}
-        <div className="flex w-[420px] shrink-0 flex-col border-r border-border">
-          {/* News wire — top 60% */}
-          <div className="flex-[3] overflow-hidden border-b border-border">
-            <NewsTape news={news} />
-          </div>
-          {/* Markets — bottom 40% */}
-          <div className="flex-[2] overflow-hidden">
-            <MarketGrid markets={MARKETS} marketStats={marketStats} />
+
+        {/* ── LEFT COL: News Wire ─────────────────────── */}
+        <div className="flex w-[360px] shrink-0 flex-col border-r border-border">
+          <div className="flex-1 overflow-hidden">
+            <NewsTape news={news} velocityData={velocityData} />
           </div>
         </div>
 
-        {/* Right column */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Decisions — top 55% */}
+        {/* ── CENTER COL: Markets + Position Book + Tags ─ */}
+        <div className="flex w-[380px] shrink-0 flex-col border-r border-border">
+          {/* Markets table — top */}
           <div className="flex-[3] overflow-hidden border-b border-border">
+            <MarketGrid markets={MARKETS} marketStats={marketStats} />
+          </div>
+          {/* Position Book — middle */}
+          <div className="flex-[3] overflow-hidden border-b border-border">
+            <PositionBook markets={MARKETS} marketStats={marketStats} />
+          </div>
+          {/* Tag heatmap — bottom */}
+          <div className="flex-[2] overflow-hidden">
+            <TagHeatmap tagStats={tagStats} />
+          </div>
+        </div>
+
+        {/* ── RIGHT COL: Decisions + Charts ──────────── */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Decision feed — top */}
+          <div className="flex-[4] overflow-hidden border-b border-border">
             <DecisionFeed decisions={decisions} />
           </div>
-          {/* Charts — bottom 45% */}
-          <div className="flex flex-[2] overflow-hidden">
-            <div className="flex-1 border-r border-border">
-              <LatencyChart data={latencyData} />
+
+          {/* Charts — 2x2 grid bottom */}
+          <div className="flex flex-[3] overflow-hidden">
+            {/* Left 2 charts stacked */}
+            <div className="flex flex-1 flex-col">
+              <div className="flex-1 border-b border-border border-r border-border overflow-hidden">
+                <LatencyChart data={latencyData} />
+              </div>
+              <div className="flex-1 border-r border-border overflow-hidden">
+                <ThroughputChart data={throughputData} />
+              </div>
             </div>
-            <div className="flex-1">
-              <DecisionChart stats={stats} />
+            {/* Right 2 charts stacked */}
+            <div className="flex flex-1 flex-col">
+              <div className="flex-1 border-b border-border overflow-hidden">
+                <ConfidenceHistogram confidences={stats.confidences} />
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <div className="flex h-full">
+                  <div className="flex-1 border-r border-border overflow-hidden">
+                    <DecisionChart stats={stats} />
+                  </div>
+                  <div className="w-[160px] shrink-0 overflow-hidden">
+                    <LatencyStats stats={stats} />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <SystemBar stats={stats} status={status} />
+      {/* Footer */}
+      <SystemBar stats={stats} status={status} sessionStart={sessionStart} />
     </div>
   )
 }
