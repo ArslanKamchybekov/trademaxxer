@@ -42,21 +42,36 @@ Every raw story passes through two gates:
 1. **Keyword filter** — headline scanned for tradeable keywords → tagged `fed`, `crypto`, `macro`, `politics`, `sec`. No match → drop.
 2. **Queue** — surviving stories written to `news:raw` Redis Stream with headline, body, source, tags, and timestamp.
 
-## Modal Agents (Groq)
+## Modal Agents (Groq) — LIVE
 
-Every market has its own agent — a persistent serverless function on Modal that subscribes to the tags relevant to that market. When a story hits `news:raw` with a matching tag, the agent wakes up.
+Every market has its own agent deployed on Modal serverless. Each agent subscribes to the Redis tag channels matching its market's tags. When a story arrives on any subscribed channel, the agent wakes, classifies via Groq, and emits a Decision.
 
 **Per-agent flow:**
 
-1. Agent receives story from `news:raw` stream (filtered to its subscribed tags)
-2. Prompt Groq (`llama3-70b-8192`) with just the headline, the agent's market, and current price
-3. Groq returns a single decision: `YES`, `NO`, or `skip`
-4. Push decision to `decisions:raw` stream
-5. Agent goes back to sleep
+1. Agent's listener subscribes to Redis tag channels (e.g. `fed`, `macro`) via pybind11 binding
+2. Story arrives → thin Python wrapper calls Modal `MarketAgent.evaluate()`
+3. Modal container prompts Groq (`llama-3.1-8b-instant`) with headline + market question + current probability
+4. Groq returns JSON: `{"action": "YES"|"NO"|"SKIP", "confidence": 0.0-1.0, "reasoning": "..."}`
+5. Non-SKIP decisions written to `decisions:raw` stream
+6. Container stays warm for 5min, then scales to zero
 
-Each agent is scoped to one market and only sees news that matches its tags. A story tagged `[fed, macro]` wakes up every agent subscribed to `fed` or `macro` — they all evaluate in parallel, independently.
+**Measured latency (live on real news feed):**
 
-**Scaling:** 0 news → 0 active agents → $0. One story matching 8 markets → 8 agents wake in parallel. Latency ~300–400ms per agent.
+| Metric | Cold start | Warm container |
+|--------|-----------|----------------|
+| Groq inference | 249ms | 249ms |
+| Modal overhead | ~2700ms | ~50–80ms |
+| **Total** | **~3000ms** | **~300–330ms** |
+
+**Scaling:** 0 news → 0 containers → $0. One story matching 8 markets → 8 parallel evaluations. `@modal.concurrent(max_inputs=20)` means each container handles up to 20 Groq calls simultaneously (I/O-bound).
+
+**Prompt evolution:**
+
+| Version | Model | Groq latency | Issue |
+|---------|-------|-------------|-------|
+| v1 | llama-3.3-70b-versatile | 311ms | Model echoed prompt phrasing as action |
+| v2 | llama-3.3-70b-versatile | ~300ms | Fixed with `_normalize_action()` parser |
+| v3 | llama-3.1-8b-instant | 249ms | Compact prompt, faster model — **current** |
 
 ## Market Registry
 
@@ -95,31 +110,41 @@ Continuous loop checking all open positions every 30 seconds:
 ```
 trademaxxer/
 ├── server/
-│   └── news_streamer/               # News intake + tagging service (Python)
-│       ├── main.py                  # Entry point — connects to DBNews, tags, broadcasts
-│       ├── config.py                # Centralized env-based configuration
-│       ├── requirements.txt
-│       ├── core/
-│       │   └── types.py             # Base exceptions, reconnection state
-│       ├── models/
-│       │   └── news.py              # RawNewsItem, TaggedNewsItem, enums (Sentiment, Category, Urgency)
-│       ├── dbnews_client/
-│       │   ├── client.py            # WebSocket client with auto-reconnect
-│       │   └── normalizer.py        # Raw DBNews JSON → RawNewsItem
-│       ├── tagger/
-│       │   └── tagger.py            # Sentiment analysis, category classification, ticker extraction
-│       └── ws_server/
-│           └── server.py            # WebSocket server broadcasting tagged news to frontend clients
+│   ├── main.py                      # Entry point — news stream + agent test harness
+│   ├── config.py                    # Centralized env-based configuration
+│   ├── requirements.txt
+│   ├── core/
+│   │   └── types.py                 # Base exceptions, reconnection state
+│   ├── models/
+│   │   └── news.py                  # RawNewsItem, TaggedNewsItem, enums
+│   ├── dbnews_client/
+│   │   ├── client.py                # WebSocket client with auto-reconnect
+│   │   └── normalizer.py            # Raw DBNews JSON → RawNewsItem
+│   ├── tagger/
+│   │   └── tagger.py                # Sentiment, category, ticker extraction
+│   ├── ws_server/
+│   │   └── server.py                # WS server broadcasting tagged news to frontend
+│   ├── agents/                      # Modal agent pipeline
+│   │   ├── schemas.py               # MarketConfig, StoryPayload, Decision dataclasses
+│   │   ├── prompts.py               # Versioned Groq prompt templates (v3)
+│   │   ├── groq_client.py           # Async Groq wrapper with retry + action normalization
+│   │   ├── agent_logic.py           # Pure evaluate(story, market, groq) → Decision
+│   │   ├── modal_app.py             # Modal App — MarketAgent class deployed serverless
+│   │   └── listener.py              # Per-market listener subscribing to tag channels
+│   └── stream/                      # Stream abstraction layer
+│       ├── interface.py             # Protocol: StreamProducer, TaggedStreamConsumer
+│       └── stub.py                  # In-memory stub for local dev (Redis coming via pybind11)
 ├── client/
 │   ├── client/                      # React frontend (Vite)
 │   │   ├── src/
-│   │   │   ├── App.jsx              # Live news feed UI — sentiment, urgency, tickers
+│   │   │   ├── App.jsx              # Live news feed UI
 │   │   │   ├── App.css
 │   │   │   └── main.jsx
 │   │   ├── package.json
 │   │   └── vite.config.js
 │   └── src/
-│       └── App.jsx                  # Alternate client entry
+│       └── App.jsx
+├── DEVLOG.md                        # Development log with benchmarks
 └── README.md
 ```
 
@@ -158,17 +183,34 @@ Server 3 — Upstash Redis (free tier)
 **Built from scratch:**
 
 - News streamer / intake service (Python) — DBNews websocket, normalizer, tagger, WS broadcast
-- Modal per-market agents (Python)
-- Solana executor (Python)
+- Modal per-market agents (Python) — deployed and benchmarked
+- Agent test harness — wired into news feed, measures end-to-end latency
+- Stream abstraction layer — Protocol interfaces with in-memory stub
+- Solana executor (Python) — TODO
 - Frontend (React + Vite)
 
 **Third-party:**
 
 - DBNews — real-time news websocket feed
-- Groq API — LLM inference
+- Groq API — LLM inference (`llama-3.1-8b-instant`)
 - VADER — financial sentiment analysis
-- Redis / Upstash — streams & state
+- Redis / Upstash — streams & state (C++ binding via pybind11, in progress)
 - Modal — serverless compute
+
+## Current Status
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| News feed (DBNews WS) | **Live** | Streaming real-time, ~2 stories/sec |
+| Intake / tagger | **Live** | Sentiment + category + tickers in <5ms |
+| WS broadcast server | **Live** | Frontend connected |
+| Modal agents (Groq) | **Deployed** | ~300ms warm, 20 concurrent per container |
+| Stream abstraction | **Built** | Protocol + in-memory stub ready |
+| Redis stream (C++) | In progress | pybind11 integration by another party |
+| Solana executor | Not started | |
+| Position monitor | Not started | |
+
+See [DEVLOG.md](DEVLOG.md) for full development history and benchmarks.
 
 ## License
 
