@@ -9,5 +9,8 @@ vaderSentiment>=3.3.2
 groq>=0.18.0
 modal>=1.0.0
 
+# ── pub_sub / redis ───────────────────────────
+redis[asyncio]>=5.0
+
 # ── shared / infra ────────────────────────────
 python-dotenv>=1.0.0

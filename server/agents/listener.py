@@ -1,23 +1,24 @@
 """
 Agent Listener
 
-Thin per-market wrapper that subscribes to the Redis tag channels matching
-its market's _tags, and calls Modal when a story arrives. One listener
-per market — no centralised dispatcher.
+Thin per-market wrapper that subscribes to the Redis pub/sub channels
+matching its market's tags via FeedSubscriber, and calls Modal when
+a story arrives. One listener per market — no centralised dispatcher.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Awaitable, Callable
 
+from pub_sub_feed import FeedSubscriber
+from news_streamer.pubsub.channels import ALL, CATEGORY_PREFIX
+
 from agents.schemas import Decision, MarketConfig, StoryPayload
-from stream.interface import StreamProducer, TaggedStreamConsumer
 
 logger = logging.getLogger(__name__)
-
-STREAM_DECISIONS = "decisions:raw"
 
 
 @dataclass
@@ -29,10 +30,22 @@ class ListenerStats:
     errors: int = 0
 
 
+def _wire_to_story(data: dict[str, Any]) -> StoryPayload:
+    """Convert the camelCase pubsub wire dict to a StoryPayload."""
+    return StoryPayload(
+        id=data["id"],
+        headline=data["headline"],
+        body=data.get("body", ""),
+        tags=tuple(data.get("categories", ())),
+        source=data.get("sourceHandle", ""),
+        timestamp=datetime.fromisoformat(data["timestamp"]),
+    )
+
+
 class AgentListener:
     """
-    Subscribes to the tag channels for a single market and calls Modal
-    on every matching story.
+    Subscribes to the Redis pub/sub channels for a single market and
+    calls Modal on every matching story.
 
     One instance per market. The runner spawns all of them as concurrent tasks.
     """
@@ -40,15 +53,13 @@ class AgentListener:
     def __init__(
         self,
         market: MarketConfig,
-        consumer: TaggedStreamConsumer,
-        producer: StreamProducer,
+        redis_url: str,
         evaluate_fn: Callable[
             [StoryPayload, MarketConfig], Awaitable[Decision]
         ] | None = None,
     ) -> None:
         self._market = market
-        self._consumer = consumer
-        self._producer = producer
+        self._redis_url = redis_url
         self._evaluate_fn = evaluate_fn or _modal_evaluate
         self._stats = ListenerStats()
 
@@ -60,31 +71,46 @@ class AgentListener:
     def stats(self) -> ListenerStats:
         return self._stats
 
+    def _feeds(self) -> list[str]:
+        """Map market tags to Redis channel names, plus news:all as fallback."""
+        feeds = [ALL]
+        for tag in self._market.tags:
+            ch = f"{CATEGORY_PREFIX}{tag}"
+            if ch not in feeds:
+                feeds.append(ch)
+        return feeds
+
     async def run(self) -> None:
         """Subscribe to this market's tag channels. Blocks until cancelled."""
-        tags = list(self._market.tags)
-        group = f"agent-{self._market.address[:12]}"
-        consumer_name = f"listener-{self._market.address[:12]}"
-
+        feeds = self._feeds()
         logger.info(
-            f"Agent for {self._market.address[:16]}… subscribing to {tags} "
+            f"Agent for {self._market.address[:16]}… subscribing to {feeds} "
             f"| {self._market.question[:60]}"
         )
-        await self._consumer.subscribe(
-            tags=tags,
-            group=group,
-            consumer=consumer_name,
-            callback=self._on_story,
-        )
 
-    async def _on_story(self, message_id: str, payload: dict[str, Any]) -> None:
-        """Handle a story that arrived on one of our subscribed tag channels."""
+        seen: set[str] = set()
+        async with FeedSubscriber(feeds=feeds, redis_url=self._redis_url) as sub:
+            while True:
+                result = await sub.pull(timeout=1.0)
+                if result is None:
+                    continue
+                channel, data = result
+                story_id = data.get("id", "")
+                if story_id in seen:
+                    continue
+                seen.add(story_id)
+                if len(seen) > 500:
+                    seen.clear()
+                await self._on_story(channel, data)
+
+    async def _on_story(self, channel: str, data: dict[str, Any]) -> None:
+        """Handle a story that arrived on one of our subscribed channels."""
         self._stats.stories_received += 1
 
         try:
-            story = StoryPayload.from_dict(payload)
+            story = _wire_to_story(data)
         except (KeyError, ValueError) as e:
-            logger.warning(f"Malformed story {message_id}: {e}")
+            logger.warning(f"Malformed story on {channel}: {e}")
             self._stats.errors += 1
             return
 
@@ -107,7 +133,6 @@ class AgentListener:
         else:
             self._stats.decisions_no += 1
 
-        await self._producer.publish(STREAM_DECISIONS, decision.to_dict())
         logger.info(
             f"[{decision.action}] {self._market.address[:16]}… "
             f"conf={decision.confidence:.2f} ({decision.latency_ms:.0f}ms) "
@@ -131,31 +156,26 @@ async def _modal_evaluate(story: StoryPayload, market: MarketConfig) -> Decision
 
 async def run_all_listeners(
     markets: list[MarketConfig],
-    consumer: TaggedStreamConsumer,
-    producer: StreamProducer,
+    redis_url: str,
     evaluate_fn: Callable[
         [StoryPayload, MarketConfig], Awaitable[Decision]
     ] | None = None,
-) -> list[AgentListener]:
+) -> list[asyncio.Task]:
     """
     Spawn one AgentListener per market as concurrent tasks.
 
-    Returns the list of listeners (for stats inspection). The tasks
-    run until the caller cancels them.
+    Returns the list of asyncio Tasks so the caller can cancel them on shutdown.
     """
     listeners = [
-        AgentListener(market, consumer, producer, evaluate_fn)
+        AgentListener(market, redis_url, evaluate_fn)
         for market in markets
     ]
 
-    logger.info(f"Spawning {len(listeners)} agent listeners")
+    logger.info(f"Spawning {len(listeners)} agent listener(s)")
 
-    tasks = [asyncio.create_task(l.run()) for l in listeners]
+    tasks = [
+        asyncio.create_task(listener.run(), name=f"agent-{listener.market.address[:12]}")
+        for listener in listeners
+    ]
 
-    # Let the caller cancel; if any listener dies unexpectedly, log it
-    done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
-    for t in done:
-        if t.exception():
-            logger.error(f"Listener crashed: {t.exception()}")
-
-    return listeners
+    return tasks

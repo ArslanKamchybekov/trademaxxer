@@ -2,20 +2,25 @@
 trademaxxer server — top-level orchestrator
 
 Runs all services in a single async event loop:
-  - news_streamer: DBNews websocket → tagger → broadcast
-  - (future) classifier: Modal per-market agents
+  - news_streamer: DBNews websocket → tagger → broadcast (WS + Redis pub/sub)
+  - agent listeners: subscribe to Redis channels → Modal (Groq) → log decisions
   - (future) executor: decision queue → proprietary trade API
   - (future) monitor: position tracking + exit logic
 
 Usage:
     cd server
-    python main.py
+    python main.py          # live DBNews feed
+    python main.py --mock   # mock headlines (no DBNews needed)
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import logging
+import os
 import signal
+import time
+from datetime import datetime, timezone
 
 try:
     from dotenv import load_dotenv
@@ -29,8 +34,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("trademaxxer")
 
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
-async def run() -> None:
+
+async def run(*, use_mock: bool = False) -> None:
     shutdown_event = asyncio.Event()
 
     loop = asyncio.get_running_loop()
@@ -39,32 +46,57 @@ async def run() -> None:
 
     # ── News Streamer ──────────────────────────────────────────────
     from news_streamer.config import settings
-    from news_streamer.dbnews_client import DBNewsWebSocketClient
     from news_streamer.tagger import NewsTagger
     from news_streamer.ws_server import NewsWebSocketServer
+    from news_streamer.pubsub import NewsPublisher
 
     ws_server = NewsWebSocketServer(
         host=settings.websocket_server.host,
         port=settings.websocket_server.port,
     )
-    dbnews_client = DBNewsWebSocketClient(settings.dbnews.ws_url)
     tagger = NewsTagger(settings.tagger, platform_tag_loader=None)
+    publisher = NewsPublisher(redis_url=REDIS_URL)
 
-    # ── Agent test — evaluate ONE event against a fake market ──────
-    from agents.schemas import MarketConfig, StoryPayload, Decision
+    dbnews_client = None
+    if not use_mock:
+        from news_streamer.dbnews_client import DBNewsWebSocketClient
+        dbnews_client = DBNewsWebSocketClient(settings.dbnews.ws_url)
 
-    test_market = MarketConfig(
-        address="FakeContract1111111111111111111111111111111",
-        question="Will the Federal Reserve cut interest rates before July 2026?",
-        current_probability=0.42,
-        tags=("fed", "macro", "economic_data"),
-    )
-    agent_tested = False
+    # ── Markets ────────────────────────────────────────────────────
+    from agents.schemas import MarketConfig, StoryPayload
 
+    test_markets = [
+        MarketConfig(
+            address="FakeContract1111111111111111111111111111111",
+            question="Will the US engage in direct military conflict with Iran before April 2026?",
+            current_probability=0.38,
+            tags=("geopolitics", "politics"),
+        ),
+        MarketConfig(
+            address="FakeContract2222222222222222222222222222222",
+            question="Will oil prices exceed $120/barrel before June 2026?",
+            current_probability=0.55,
+            tags=("geopolitics", "commodities", "macro"),
+        ),
+        MarketConfig(
+            address="FakeContract3333333333333333333333333333333",
+            question="Will the Federal Reserve cut interest rates before July 2026?",
+            current_probability=0.42,
+            tags=("macro", "economic_data"),
+        ),
+        MarketConfig(
+            address="FakeContract4444444444444444444444444444444",
+            question="Will Bitcoin exceed $150k before September 2026?",
+            current_probability=0.31,
+            tags=("crypto",),
+        ),
+    ]
+
+    # ── News callback ──────────────────────────────────────────────
     message_count = 0
 
     async def on_news(news):
-        nonlocal message_count, agent_tested
+        nonlocal message_count
         message_count += 1
 
         tag_str = ""
@@ -87,16 +119,16 @@ async def run() -> None:
 
         await ws_server.broadcast(news, tagged)
 
-        # ── Fire ONE event at Modal MarketAgent ─────────────────
-        if not agent_tested and tagged is not None:
-            agent_tested = True
-            asyncio.create_task(_test_agent(tagged))
+        if tagged is not None and redis_live:
+            try:
+                await publisher.publish(tagged)
+            except Exception as e:
+                logger.error(f"Redis publish failed: {e}")
+
+    # ── Modal warm-up ──────────────────────────────────────────────
 
     async def _warmup_modal(market: MarketConfig) -> None:
         """Fire a dummy evaluation to force Modal container boot before real news."""
-        import time
-        from datetime import datetime, timezone
-
         dummy = StoryPayload(
             id="warmup-ping",
             headline="warmup ping — ignore",
@@ -121,59 +153,11 @@ async def run() -> None:
         except Exception as e:
             logger.warning(f"Modal warm-up failed (non-fatal): {e}")
 
-    async def _test_agent(tagged):
-        """One-shot test: send the first tagged event to Modal MarketAgent."""
-        import time
-
-        story = StoryPayload(
-            id=tagged.id,
-            headline=tagged.headline,
-            body=tagged.body,
-            tags=tuple(c.value for c in tagged.categories) or ("macro",),
-            source=tagged.source_handle,
-            timestamp=tagged.timestamp,
-        )
-
-        logger.info(
-            f"\n{'='*60}\n"
-            f"  AGENT TEST — sending to Modal MarketAgent\n"
-            f"  Story:  {story.headline[:80]}\n"
-            f"  Market: {test_market.question}\n"
-            f"  Prob:   {test_market.current_probability:.0%}\n"
-            f"{'='*60}"
-        )
-
-        try:
-            import modal
-
-            AgentCls = modal.Cls.from_name("trademaxxer-agents", "MarketAgent")
-            agent = AgentCls()
-
-            t0 = time.monotonic()
-            result = await agent.evaluate.remote.aio(
-                story.to_dict(), test_market.to_dict()
-            )
-            total_ms = (time.monotonic() - t0) * 1000
-
-            dec = Decision.from_dict(result)
-
-            logger.info(
-                f"\n{'='*60}\n"
-                f"  AGENT RESULT\n"
-                f"  Action:     {dec.action}\n"
-                f"  Confidence: {dec.confidence:.2f}\n"
-                f"  Reasoning:  {dec.reasoning}\n"
-                f"  Groq ms:    {dec.latency_ms:.0f}\n"
-                f"  Total ms:   {total_ms:.0f}  (includes Modal cold start)\n"
-                f"  Prompt:     {dec.prompt_version}\n"
-                f"{'='*60}"
-            )
-        except Exception as e:
-            logger.error(f"Agent test failed: {e}", exc_info=True)
-
-    dbnews_client.on_message(on_news)
-    dbnews_client.on_error(lambda e: logger.error(f"DBNews error: {e}"))
-    dbnews_client.on_reconnect(lambda: logger.info("DBNews reconnected"))
+    # ── Register callbacks ─────────────────────────────────────────
+    if dbnews_client is not None:
+        dbnews_client.on_message(on_news)
+        dbnews_client.on_error(lambda e: logger.error(f"DBNews error: {e}"))
+        dbnews_client.on_reconnect(lambda: logger.info("DBNews reconnected"))
 
     # ── Start services ─────────────────────────────────────────────
     logger.info("Starting trademaxxer server")
@@ -183,19 +167,49 @@ async def run() -> None:
         f"ws://{settings.websocket_server.host}:{settings.websocket_server.port}"
     )
 
-    # ── Warm up Modal container before news feed connects ──────────
-    await _warmup_modal(test_market)
+    # Connect to Redis
+    redis_live = False
+    try:
+        await publisher.connect()
+        redis_live = True
+        logger.info(f"NewsPublisher connected to Redis at {REDIS_URL}")
+    except Exception as e:
+        logger.error(f"Failed to connect NewsPublisher to Redis: {e}")
+        logger.error("Agent listeners will NOT start — no Redis connection")
 
+    # Warm up Modal container
+    await _warmup_modal(test_markets[0])
+
+    # Start agent listeners (subscribe to Redis channels → Modal)
+    listener_tasks: list[asyncio.Task] = []
+    if redis_live:
+        from agents.listener import run_all_listeners
+
+        listener_tasks = await run_all_listeners(
+            markets=test_markets,
+            redis_url=REDIS_URL,
+        )
+        logger.info(f"{len(listener_tasks)} agent listener(s) running")
+
+    # Connect to DBNews — news starts flowing
     await dbnews_client.connect()
-    logger.info("Connected to DBNews feed")
-
-    # (future) start executor, classifier, monitor here
+    logger.info("Connected to DBNews feed - pipeline is live")
 
     # ── Wait for shutdown ──────────────────────────────────────────
     await shutdown_event.wait()
 
     # ── Teardown ───────────────────────────────────────────────────
     logger.info("Shutting down...")
+
+    for task in listener_tasks:
+        task.cancel()
+    if listener_tasks:
+        await asyncio.gather(*listener_tasks, return_exceptions=True)
+        logger.info("Agent listeners stopped")
+
+    if redis_live:
+        await publisher.close()
+
     await ws_server.stop()
     await dbnews_client.disconnect()
 
@@ -211,4 +225,7 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    parser = argparse.ArgumentParser(description="trademaxxer server")
+    parser.add_argument("--mock", action="store_true", help="Use mock news feed instead of DBNews")
+    args = parser.parse_args()
+    asyncio.run(run(use_mock=args.mock))
