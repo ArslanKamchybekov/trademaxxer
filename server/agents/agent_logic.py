@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import time
 
-from agents.groq_client import GroqClassificationError, GroqClient
+from agents.groq_client import GroqClient
 from agents.prompts import PROMPT_VERSION, SYSTEM_PROMPT, build_user_prompt
 from agents.schemas import Decision, MarketConfig, StoryPayload
 
