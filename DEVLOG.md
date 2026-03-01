@@ -709,14 +709,163 @@ Apple Silicon (M-series) has unified memory with high bandwidth and excellent si
 
 ### What's Next
 
-- [x] True batching: chunked parallel RPCs (done — Session 6)
-- [x] Dynamic market management: UI toggle (done — Session 7)
-- [x] `--local` flag: local ONNX inference, 16–69ms (done — Session 8)
-- [ ] Deploy server on co-located VPS
-- [ ] Move entire pipeline to Modal (est. total latency: ~40ms)
-- [ ] Per-stage timing instrumentation (tagger → dispatch → inference → decision)
-- [ ] Market registry from on-chain state (replace hardcoded `MarketConfig`)
-- [ ] Decision queue (decouple agents from executor)
-- [ ] Solana executor — read decisions, fire trades via proprietary API
-- [ ] Position monitor — resolution, edge compression, contradicting news, time decay
-- [ ] P&L tracking from real trades (replace simulated P&L)
+- [x] True batching: chunked parallel RPCs (done, Session 6)
+- [x] Dynamic market management: UI toggle (done, Session 7)
+- [x] `--local` flag: local ONNX inference, 16-69ms (done, Session 8)
+- [x] Pivot back to Groq LLM with theoretical pricing (done, Session 10)
+- [x] Kalshi market registry integration (done, Session 11)
+- [x] Jupiter Ultra / Solana wallet (done, Session 12)
+- [x] Demo system with synthetic markets (done, Session 13)
+- [x] Hackathon presentation (done, Session 14)
+
+---
+
+## Session 10: Groq LLM Pivot + Theoretical Pricing (Feb 28, 2026)
+
+### Goal
+
+Replace the ONNX NLI classification model with Groq LLM inference. The NLI model produced binary entailment/contradiction/neutral labels, but couldn't generate a *theoretical fair price* for a market. For trading, we need the agent to say not just "YES" but "I think this market should be priced at 91%." That delta between theo and current price is the real signal.
+
+### What Changed
+
+**Agent logic rewrite (`agent_logic.py`):**
+- New `evaluate(story, market, groq)` function replaces the NLI pipeline
+- Groq returns 32 JSON tokens: `{action: "YES"|"NO", p: 1-99}`
+- `p` is the agent's theoretical probability (1-99 scale, mapped to 0.01-0.99)
+- Skip logic: if `|theo - current_probability| < SKIP_THRESHOLD (0.06)`, the agent returns SKIP
+- Confidence = `abs(theo - current) * 2`, capped at 1.0
+
+**Prompt v6 (`prompts.py`):**
+- System prompt: "You reprice prediction-market contracts based on breaking news"
+- User prompt includes: headline, market question, current probability
+- Output: strict JSON `{action, p}`. No reasoning, no verbose text. 32 tokens max.
+- Model: `llama-3.1-8b-instant` via Groq API
+
+**Decision schema (`schemas.py`):**
+- Added `theo` field to `Decision` dataclass
+- `theo` is the agent's fair price estimate (0.0-1.0)
+- Dashboard displays theo alongside current market price
+
+**Removed:** `modal_app_fast.py`, `local_inference.py`, `nli_postprocess.py` (ONNX NLI pipeline)
+
+### Why the Pivot
+
+The NLI model was faster (16-69ms) but fundamentally limited:
+1. **No price discovery.** NLI says "entailment" (YES) but can't say *how much* YES. A market at 95% and a market at 50% both get the same signal.
+2. **No skip intelligence.** The 6% threshold requires a theo price to compare against current. NLI confidence != market-aware confidence.
+3. **Groq is fast enough.** At 68ms fastest / ~250ms typical, Groq is well within our <1s target. The extra latency buys genuine market intelligence.
+
+### Benchmarks
+
+| Metric | ONNX NLI | Groq LLM |
+|--------|----------|----------|
+| Fastest | 16ms | 68ms |
+| Typical | 20-40ms | ~250ms |
+| Output | YES/NO/SKIP | YES/NO + theo price |
+| Market awareness | None | Full (reads current prob) |
+| Skip intelligence | Confidence-based | Delta-based (6% threshold) |
+
+---
+
+## Session 11: Kalshi Market Registry (Feb 28, 2026)
+
+### Goal
+
+Replace hardcoded test markets with real prediction markets from Kalshi's API.
+
+### Implementation
+
+**`market_registry/kalshi.py`:**
+- Fetches active events from `https://api.elections.kalshi.com/trade-api/v2`
+- Filters by news relevance (excludes sports, entertainment)
+- Converts Kalshi events to `MarketConfig` objects with proper tags
+- Tag mapping: politics, economics, crypto, financials, companies, tech_science, climate, culture
+
+**`market_registry/kalshi_ws.py`:**
+- WebSocket connection to Kalshi for live orderbook prices
+- `LiveMarketManager` streams `current_probability` updates in real-time
+- JWT authentication with API key + private key
+
+### Architecture Decision
+
+Kalshi feeds into the Redis Pub/Sub layer as a market data source, not a trading venue. We use Kalshi's market questions and probabilities as inputs to our agents, but execute trades on Solana via Jupiter Ultra.
+
+---
+
+## Session 12: Jupiter Ultra / Solana Wallet (Feb 28, 2026)
+
+### Goal
+
+Add on-chain trade execution via Jupiter Ultra API on Solana, with a real-time wallet UI.
+
+### Implementation
+
+**`SolanaWallet.jsx`:**
+- USDC balance tracking with eager synchronous deduction (prevents race conditions during rapid trades)
+- Jupiter Ultra API integration (`lite-api.jup.ag/ultra/v1/order`) for USDC/SOL swap quotes
+- Portfolio value calculated from positions marked to market using agent theo prices
+- P&L = positions value - total cost basis
+- Auto-trades on agent decisions: YES buys at theo, NO sells at theo
+- Trade queue with async drain to prevent blocking mark-to-market updates
+
+**Key bug fixes:**
+1. **Stale ref issue:** `usdcRef` was only updated after re-render, causing incorrect balance checks during batch processing. Fixed with eager synchronous `deductUsdc` callback.
+2. **Decision dropping:** `prevDecLen.current` advanced before `processingRef` checked, causing decisions to be permanently lost. Fixed by decoupling synchronous mark-to-market from async trade execution.
+3. **Static demo prices:** Demo markets don't send `price_update` WebSocket messages. Fixed by marking positions to market using agent `theo` on every decision.
+
+---
+
+## Session 13: Demo System (Feb 28, 2026)
+
+### Goal
+
+Ship a complete demo that runs with zero external dependencies for the hackathon.
+
+### Implementation
+
+**`demo_markets.py`:**
+- 7 demo contracts modeled after real Kalshi markets:
+  - IRAN-STRIKE-YES/NO, KHAMENEI-RESIGN, BRENT-130, FED-EMERGENCY-CUT, BTC-150K, VIX-40, HORMUZ-CLOSURE
+- `run_demo_injector()`: background task injects synthetic headlines every 8-25 seconds
+- ~40 headlines covering geopolitics, oil, Fed policy, crypto, volatility
+- Headlines sourced from Reuters, Bloomberg, AP, Axios, WSJ, FT
+- Integrates with both mock and live feed modes
+
+**`start.sh --mock`:**
+- Starts Python server with mock agents (random YES/NO/SKIP)
+- Starts Vite dev server for dashboard
+- Demo injector runs alongside mock feed
+- Zero external dependencies: no Redis, no Modal, no Groq, no DBNews
+
+---
+
+## Session 14: Hackathon Presentation (Feb 28, 2026)
+
+### Goal
+
+Build an interactive Reveal.js presentation matching the Bloomberg Terminal aesthetic of the dashboard.
+
+### Implementation
+
+**Stack:** React + Vite + Reveal.js + Framer Motion + Recharts
+
+**7 slides:**
+1. **Title:** Team photos, project name, powered by Modal + Solana, key stats
+2. **Prediction Markets 101:** What are prediction markets + Fintech/Simple mode toggle
+3. **Problem:** Animated news ticker, price crash/spike charts, alpha decay visualization
+4. **Solution:** 4 panels with animated visualizations (Modal fan-out bars, Jupiter conversion flow, Groq latency comparison, Pub/Sub routing)
+5. **Live Demo:** Screenshot placeholder for live demo during presentation
+6. **Architecture:** Interactive flow graph. 8 clickable nodes from DBNews to Solana TX. Click any node to see details, tech stack, and role description.
+7. **Closing:** Stats, team names, questions
+
+**Fintech Mode Toggle:**
+- Global React context (`FintechCtx`) toggles between industry terminology and plain English
+- Affects every slide: problem descriptions, solution panel titles, architecture node details
+- Example: "Tag-Based Pub/Sub" becomes "Smart News Routing", "alpha decays exponentially" becomes "the profit opportunity shrinks fast"
+
+### Design
+
+- Bloomberg Terminal color scheme: `#0a0a0a` background, `#ff9800` amber primary, `#00c853` green, `#ff1744` red
+- JetBrains Mono font, zero border-radius, 1px borders
+- CRT scanline overlay
+- All animations triggered by IntersectionObserver (play when slide is visible)
