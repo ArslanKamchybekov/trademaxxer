@@ -206,9 +206,9 @@ html, body, #root {
 }
 
 .badge-modal {
-  color: var(--primary);
-  border-color: var(--primary);
-  background: rgba(255, 152, 0, 0.08);
+  color: #00ff41;
+  border-color: #00ff41;
+  background: rgba(0, 255, 65, 0.08);
 }
 
 .badge-groq {
