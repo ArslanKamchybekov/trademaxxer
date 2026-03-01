@@ -141,6 +141,11 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
     # ── Market state (all OFF by default) ──────────────────────────
     enabled_markets: set[str] = set()
 
+    # ── In-memory pub/sub: tag channels → market eval callbacks ───
+    from pubsub import PubSub
+    bus = PubSub()
+    market_callbacks: dict[str, object] = {}  # address → callback ref for unsubscribe
+
     def _markets_state_payload() -> dict:
         payload = {
             "markets": [m.to_dict() for m in markets],
@@ -182,10 +187,12 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
         if want_enabled and address not in enabled_markets:
             enabled_markets.add(address)
-            logger.info(f"Market enabled: {address[:16]}…")
+            _subscribe_market(market_by_addr[address])
+            logger.info(f"Market enabled: {address[:16]}… (bus: {bus.channel_count}ch, {bus.subscriber_count} subs)")
         elif not want_enabled and address in enabled_markets:
             enabled_markets.discard(address)
-            logger.info(f"Market disabled: {address[:16]}…")
+            _unsubscribe_market(market_by_addr[address])
+            logger.info(f"Market disabled: {address[:16]}… (bus: {bus.channel_count}ch, {bus.subscriber_count} subs)")
 
         ws_server.set_welcome_extra({"markets_state": _markets_state_payload()})
         await ws_server.broadcast_json({
@@ -194,6 +201,68 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         })
 
     ws_server.set_command_handler(_handle_command)
+
+    # ── Per-market eval callback (created once per market) ─────────
+
+    def _make_market_callback(market: MarketConfig):
+        """Build an async callback bound to a single market for the bus."""
+        async def _on_story(story: StoryPayload) -> None:
+            t0 = time.monotonic()
+
+            if use_mock and not use_local:
+                from mock_feed import mock_evaluate
+                try:
+                    decision = await mock_evaluate(story, market)
+                except Exception as e:
+                    logger.error(f"Mock eval failed: {e}")
+                    return
+                result = decision.to_dict()
+            elif use_local:
+                from agents.agent_logic import evaluate as groq_evaluate
+                groq = _get_groq_client()
+                try:
+                    decision = await groq_evaluate(story, market, groq)
+                    result = decision.to_dict()
+                except Exception as e:
+                    logger.warning(f"Groq eval failed for {market.address[:8]}…: {e}")
+                    return
+            else:
+                agent = _get_modal_agent()
+                try:
+                    result = await agent.evaluate.remote.aio(
+                        story.to_dict(), market.to_dict(),
+                    )
+                except Exception as e:
+                    logger.warning(f"Modal eval failed for {market.address[:8]}…: {e}")
+                    return
+
+            eval_ms = (time.monotonic() - t0) * 1000
+            result["headline"] = story.headline
+            result["market_question"] = market.question
+            result["prev_price"] = market.current_probability
+
+            action = result.get("action", "SKIP")
+            if action != "SKIP":
+                theo = result.get("theo")
+                theo_str = f" theo={theo:.0%}" if theo is not None else ""
+                logger.info(f"[{action}] {market.address[:8]}…{theo_str} {eval_ms:.0f}ms")
+
+            asyncio.create_task(ws_server.broadcast_decision(result))
+
+        return _on_story
+
+    def _subscribe_market(market: MarketConfig) -> None:
+        cb = _make_market_callback(market)
+        market_callbacks[market.address] = cb
+        for tag in market.tags:
+            bus.subscribe(tag, cb)
+
+    def _unsubscribe_market(market: MarketConfig) -> None:
+        cb = market_callbacks.pop(market.address, None)
+        if cb is None:
+            return
+        for tag in market.tags:
+            bus.unsubscribe(tag, cb)
 
     # ── News callback ──────────────────────────────────────────────
     message_count = 0
@@ -208,10 +277,6 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         elif news.is_priority:
             tag_str = "[HIGH] "
 
-        ticker_str = ""
-        if news.pre_tagged_tickers:
-            ticker_str = f" | {', '.join(news.pre_tagged_tickers)}"
-
         if "HOT" in news.urgency_tags or news.is_priority:
             logger.info(f"{tag_str}{news.headline[:60]}...")
 
@@ -223,115 +288,20 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
         asyncio.create_task(ws_server.broadcast(news, tagged))
 
+        tags = tuple(c.value for c in tagged.categories) if tagged and tagged.categories else ()
+        if not tags:
+            return
+
         story = StoryPayload(
             id=news.id,
             headline=news.headline,
             body=getattr(news, "body", ""),
-            tags=tuple(tagged.categories) if tagged and tagged.categories else (),
+            tags=tags,
             source=getattr(news, "source_handle", ""),
             timestamp=datetime.now(timezone.utc),
         )
 
-        if use_mock and not use_local:
-            for market in markets:
-                if market.address in enabled_markets:
-                    asyncio.create_task(_mock_eval_and_broadcast(story, market))
-        elif enabled_markets:
-            asyncio.create_task(_eval_and_broadcast(story))
-
-    # ── Mock agent evaluator (inline, no Groq) ────────────────────
-
-    async def _mock_eval_and_broadcast(story: StoryPayload, market: MarketConfig) -> None:
-        from mock_feed import mock_evaluate
-
-        try:
-            decision = await mock_evaluate(story, market)
-        except Exception as e:
-            logger.error(f"Mock eval failed: {e}")
-            return
-
-        if decision.confidence > 0.7 or decision.action != "SKIP":
-            logger.info(f"[{decision.action}] {market.address[:8]}… conf={decision.confidence:.1f}")
-        payload = decision.to_dict()
-        payload["headline"] = story.headline
-        payload["market_question"] = market.question
-        payload["prev_price"] = market.current_probability
-        asyncio.create_task(ws_server.broadcast_decision(payload))
-
-    # ── Groq dispatch (tag-filter → parallel evals) ───────────────
-
-    def _match_markets(story: StoryPayload) -> list[MarketConfig]:
-        """Return enabled markets whose tags overlap with the story."""
-        story_tags = set(story.tags)
-        if not story_tags:
-            return []
-        return [
-            m for m in markets
-            if m.address in enabled_markets and story_tags & set(m.tags)
-        ]
-
-    async def _eval_and_broadcast(story: StoryPayload) -> None:
-        """Tag-filter enabled markets, fan-out Groq evals, broadcast results."""
-        matching = _match_markets(story)
-        if not matching:
-            return
-
-        t0 = time.monotonic()
-
-        if use_local:
-            results = await _eval_local(story, matching)
-        else:
-            results = await _eval_modal(story, matching)
-
-        eval_ms = (time.monotonic() - t0) * 1000
-
-        for payload in results:
-            payload["headline"] = story.headline
-            mkt = market_by_addr.get(payload["market_address"])
-            if mkt:
-                payload["market_question"] = mkt.question
-                payload["prev_price"] = mkt.current_probability
-            action = payload["action"]
-            theo = payload.get("theo")
-            if action != "SKIP":
-                theo_str = f" theo={theo:.0%}" if theo is not None else ""
-                logger.info(
-                    f"[{action}] {payload['market_address'][:8]}…"
-                    f"{theo_str} {eval_ms:.0f}ms"
-                )
-            asyncio.create_task(ws_server.broadcast_decision(payload))
-
-    async def _eval_local(story: StoryPayload, matching: list[MarketConfig]) -> list[dict]:
-        """Call Groq API directly from this process."""
-        from agents.agent_logic import evaluate as groq_evaluate
-
-        groq = _get_groq_client()
-
-        async def _one(market: MarketConfig) -> dict | None:
-            try:
-                decision = await groq_evaluate(story, market, groq)
-                return decision.to_dict()
-            except Exception as e:
-                logger.warning(f"Groq eval failed for {market.address[:8]}…: {e}")
-                return None
-
-        raw = await asyncio.gather(*[_one(m) for m in matching])
-        return [r for r in raw if r is not None]
-
-    async def _eval_modal(story: StoryPayload, matching: list[MarketConfig]) -> list[dict]:
-        """Fan-out evals to Modal containers (Groq calls happen server-side)."""
-        agent = _get_modal_agent()
-        story_dict = story.to_dict()
-
-        async def _one(market: MarketConfig) -> dict | None:
-            try:
-                return await agent.evaluate.remote.aio(story_dict, market.to_dict())
-            except Exception as e:
-                logger.warning(f"Modal eval failed for {market.address[:8]}…: {e}")
-                return None
-
-        raw = await asyncio.gather(*[_one(m) for m in matching])
-        return [r for r in raw if r is not None]
+        await bus.publish(tags, story)
 
     # ── Agent warm-up ─────────────────────────────────────────────
 

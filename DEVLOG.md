@@ -91,7 +91,7 @@ Wired `MarketAgent` into `main.py` to test against live news. On the first tagge
 
 ### Benchmarks
 
-Live test against real DBNews feed:
+Live test against real WorldMonitor feed:
 
 | Run | Prompt | Model | Groq ms | Total ms | Container | Action | Confidence |
 |-----|--------|-------|---------|----------|-----------|--------|------------|
@@ -166,7 +166,7 @@ Runs after Redis connects, before news feed starts. Non-fatal on failure.
 Created `mock_feed.py` with 100 realistic financial/geopolitical headlines:
 - Each headline has a body and pre-tagged categories
 - Covers: geopolitics, politics, macro, economic_data, commodities, crypto, tech, earnings
-- `run_mock_feed()` fires them at random 1–4s intervals through the same `on_news` callback as DBNews
+- `run_mock_feed()` fires them at random 1–4s intervals through the same `on_news` callback as WorldMonitor
 - Activated via `python3 main.py --mock`
 
 ### Phase 4: Mock Agent Evaluator
@@ -316,7 +316,7 @@ Replace Groq API calls with a pretrained NLI model running directly on Modal. El
 
 ### The Problem
 
-Running live against DBNews with 4 markets, Groq's free tier rate limit (6000 TPM) was exhausted instantly. Every headline triggered 4 separate Groq API calls (one per market listener), burning ~280 tokens each. During high-volume news events (e.g. Iran situation), the feed was producing 2+ stories/sec — that's 8+ Groq calls/sec, way past the limit. Half the evaluations were failing with `429 Rate limit exceeded`.
+Running live against WorldMonitor with 4 markets, Groq's free tier rate limit (6000 TPM) was exhausted instantly. Every headline triggered 4 separate Groq API calls (one per market listener), burning ~280 tokens each. During high-volume news events (e.g. Iran situation), the feed was producing 2+ stories/sec — that's 8+ Groq calls/sec, way past the limit. Half the evaluations were failing with `429 Rate limit exceeded`.
 
 Beyond rate limits, the per-call latency was 250–330ms for Groq inference alone, plus Modal RPC overhead. Total latency per decision was ~300–400ms warm, ~3s cold.
 
@@ -396,7 +396,7 @@ One command to start everything: Redis, server, frontend.
 Created `start.sh` at project root:
 
 ```bash
-./start.sh           # live: Redis + DBNews + Modal NLI agents
+./start.sh           # live: Redis + WorldMonitor + Modal NLI agents
 ./start.sh --mock    # mock: fake news + fake agents (no Redis/Modal)
 ```
 
@@ -643,7 +643,7 @@ Created `agents/local_inference.py` — a `LocalNLIAgent` class that mirrors `Fa
 Added `--local` flag to `main.py` and `start.sh`:
 
 ```bash
-./start.sh --local          # live DBNews + local ONNX (no Modal, no Redis)
+./start.sh --local          # live WorldMonitor + local ONNX (no Modal, no Redis)
 ./start.sh --mock --local   # mock headlines + real local ONNX inference
 ```
 
@@ -655,13 +655,13 @@ When `--local` is active:
 
 ### Tag-filter Fallback
 
-Hit a bug: live DBNews headlines (non-English, emojis, social media posts) often get zero categories from the tagger. The tag-filter was silently dropping every story because `story.tags` was empty and couldn't intersect with any market's tags.
+Hit a bug: live WorldMonitor headlines (non-English, emojis, social media posts) often get zero categories from the tagger. The tag-filter was silently dropping every story because `story.tags` was empty and couldn't intersect with any market's tags.
 
 Fix: when `story.tags` is empty, evaluate against **all** enabled markets as a fallback. When tags are present, filter normally. This matches the `news:all` fallback pattern from the Redis era.
 
 ### Benchmarks
 
-Tested against live DBNews feed with 3 armed markets:
+Tested against live WorldMonitor feed with 3 armed markets:
 
 | Metric | Value |
 |--------|-------|
@@ -835,7 +835,7 @@ Ship a complete demo that runs with zero external dependencies for the hackathon
 - Starts Python server with mock agents (random YES/NO/SKIP)
 - Starts Vite dev server for dashboard
 - Demo injector runs alongside mock feed
-- Zero external dependencies: no Redis, no Modal, no Groq, no DBNews
+- Zero external dependencies: no Redis, no Modal, no Groq, no WorldMonitor
 
 ---
 
@@ -855,7 +855,7 @@ Build an interactive Reveal.js presentation matching the Bloomberg Terminal aest
 3. **Problem:** Animated news ticker, price crash/spike charts, alpha decay visualization
 4. **Solution:** 4 panels with animated visualizations (Modal fan-out bars, Jupiter conversion flow, Groq latency comparison, Pub/Sub routing)
 5. **Live Demo:** Screenshot placeholder for live demo during presentation
-6. **Architecture:** Interactive flow graph. 8 clickable nodes from DBNews to Solana TX. Click any node to see details, tech stack, and role description.
+6. **Architecture:** Interactive flow graph. 8 clickable nodes from WorldMonitor to Solana TX. Click any node to see details, tech stack, and role description.
 7. **Closing:** Stats, team names, questions
 
 **Fintech Mode Toggle:**
