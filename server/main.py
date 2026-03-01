@@ -453,8 +453,13 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
                     'error': 'DFlow executor not available'
                 }, headers=headers, status=500)
 
-            # Get DFlow market ID from mapping
-            dflow_market_id = market_mapper.get_dflow_market_id(kalshi_ticker)
+            # Check if the market_id is already a DFlow market ID (starts with KX)
+            if kalshi_ticker.startswith('KXFEDCHAIRNOM-'):
+                # Direct DFlow market ID - use it directly
+                dflow_market_id = kalshi_ticker
+            else:
+                # Try to get DFlow market ID from Kalshi mapping
+                dflow_market_id = market_mapper.get_dflow_market_id(kalshi_ticker)
 
             # TEST MODE: If no mapping found, create a mock one for demo
             if not dflow_market_id:

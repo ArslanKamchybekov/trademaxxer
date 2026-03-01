@@ -156,7 +156,7 @@ export default function App() {
             <div className="flex-1 border-r border-border overflow-hidden">
               <DecisionFeed decisions={decisions} />
             </div>
-            <div className="w-[200px] shrink-0 overflow-hidden">
+            <div className="w-[280px] shrink-0 overflow-hidden">
               <div className="h-full flex flex-col">
                 <div className="border-b border-border px-2 py-1">
                   <div className="flex gap-1">

@@ -42,7 +42,17 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
   // Get markets with trades (both agent and manual)
   const tradeMarkets = [...new Set(allTrades.map(t => t.market.address))]
     .map(address => {
-      const market = markets.find(m => m.address === address)
+      // First try to find market in main markets array (Kalshi markets)
+      let market = markets.find(m => m.address === address)
+
+      // If not found, this might be a DFlow market - use the market from the trade itself
+      if (!market) {
+        const trade = allTrades.find(t => t.market.address === address)
+        if (trade && trade.market) {
+          market = trade.market
+        }
+      }
+
       if (!market) return null
 
       const trades = allTrades.filter(t => t.market.address === address)
@@ -63,19 +73,35 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
     })
     .filter(Boolean)
 
-  // Calculate total P&L from both agent and manual positions
-  let totalPnl = 0
+  // Calculate P&L by type
+  let totalSimPnl = 0
+  let totalOnChainPnl = 0
+  let totalDFlowTestPnl = 0
 
-  // Agent P&L
+  // Agent P&L (simulation)
   for (const m of marketsWithAgentPositions) {
     const s = marketStats[m.address]
-    if (s) totalPnl += s.pnl
+    if (s) totalSimPnl += s.pnl
   }
 
-  // All trades P&L (manual + agent)
+  // All trades P&L categorized
   for (const pos of tradeMarkets) {
-    totalPnl += pos.pnl
+    const tradesForMarket = allTrades.filter(t => t.market.address === pos.market.address)
+    const hasOnChain = tradesForMarket.some(t => t.venue === "dflow" && t.tx_hash && !t.test_mode)
+    const hasDFlow = tradesForMarket.some(t => t.venue === "dflow")
+
+    if (hasOnChain) {
+      totalOnChainPnl += pos.pnl
+    } else if (hasDFlow) {
+      totalDFlowTestPnl += pos.pnl
+    } else {
+      totalSimPnl += pos.pnl
+    }
   }
+
+  const totalPnl = totalSimPnl + totalOnChainPnl + totalDFlowTestPnl
+  const hasOnChainTrades = totalOnChainPnl !== 0
+  const hasDFlowTestTrades = totalDFlowTestPnl !== 0
 
   return (
     <div className="flex h-full flex-col">
@@ -83,12 +109,38 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
         <span className="text-[10px] font-bold uppercase tracking-widest text-primary">
           Position Book
         </span>
-        <span className="tabular text-[10px]">
-          <span className="text-muted-foreground">SIM P&amp;L </span>
-          <span className={totalPnl >= 0 ? "text-yes" : "text-no"}>
-            {totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(0)}
-          </span>
-        </span>
+        <div className="tabular text-[10px] space-y-0.5">
+          {hasOnChainTrades && (
+            <div>
+              <span className="text-muted-foreground">⛓️ On-Chain </span>
+              <span className={totalOnChainPnl >= 0 ? "text-yes" : "text-no"}>
+                {totalOnChainPnl >= 0 ? "+" : ""}{totalOnChainPnl.toFixed(0)}
+              </span>
+            </div>
+          )}
+          {hasDFlowTestTrades && (
+            <div>
+              <span className="text-muted-foreground">🧪 DFlow </span>
+              <span className={totalDFlowTestPnl >= 0 ? "text-yes" : "text-no"}>
+                {totalDFlowTestPnl >= 0 ? "+" : ""}{totalDFlowTestPnl.toFixed(0)}
+              </span>
+            </div>
+          )}
+          <div>
+            <span className="text-muted-foreground">SIM </span>
+            <span className={totalSimPnl >= 0 ? "text-yes" : "text-no"}>
+              {totalSimPnl >= 0 ? "+" : ""}{totalSimPnl.toFixed(0)}
+            </span>
+          </div>
+          {(hasOnChainTrades || hasDFlowTestTrades) && (
+            <div className="border-t border-border/30 pt-0.5">
+              <span className="text-muted-foreground">Total </span>
+              <span className={totalPnl >= 0 ? "text-yes" : "text-no"}>
+                {totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(0)}
+              </span>
+            </div>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
         <table className="w-full text-[10px]">
@@ -151,15 +203,30 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
                   const tradesForMarket = allTrades.filter(t => t.market.address === market.address)
                   const hasManual = tradesForMarket.some(t => t.type === "manual")
                   const hasAgent = tradesForMarket.some(t => t.type === "agent")
+                  const hasOnChain = tradesForMarket.some(t => t.venue === "dflow" && t.tx_hash && !t.test_mode)
+                  const hasDFlow = tradesForMarket.some(t => t.venue === "dflow")
+
+                  // Get the latest on-chain transaction hash for Solscan link
+                  const onChainTrade = tradesForMarket.find(t => t.venue === "dflow" && t.tx_hash && !t.test_mode)
+                  const dflowTrade = tradesForMarket.find(t => t.venue === "dflow")
 
                   let tradeTypeLabel = "M"
-                  if (hasAgent && hasManual) tradeTypeLabel = "A+M"
+                  if (hasOnChain) tradeTypeLabel = "⛓️"
+                  else if (hasDFlow) tradeTypeLabel = "🧪" // Test mode DFlow
+                  else if (hasAgent && hasManual) tradeTypeLabel = "A+M"
                   else if (hasAgent) tradeTypeLabel = "A"
 
                   return (
                     <tr key={`trade-${market.address}`} className="border-b border-border/30">
                       <td className="max-w-[140px] truncate px-1.5 py-1 text-foreground/80">
-                        <span className="text-[8px] text-muted-foreground/50 mr-1">{tradeTypeLabel}</span>
+                        <span className="text-[8px] text-muted-foreground/50 mr-1" title={
+                          hasOnChain ? "On-chain trade" :
+                          hasDFlow ? "DFlow test mode" :
+                          hasAgent && hasManual ? "Agent + Manual" :
+                          hasAgent ? "Agent" : "Manual"
+                        }>
+                          {tradeTypeLabel}
+                        </span>
                         {market.question.slice(0, 35)}…
                       </td>
                       <td className="px-1.5 py-1">
@@ -170,13 +237,32 @@ export default function PositionBook({ markets, marketStats, allTrades = [] }) {
                           <div className="text-muted-foreground">
                             {trades} trade{trades !== 1 ? 's' : ''}
                           </div>
+                          {hasOnChain && onChainTrade && (
+                            <a
+                              href={`https://solscan.io/tx/${onChainTrade.tx_hash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-amber hover:text-amber/80 underline"
+                              title="View on Solscan"
+                            >
+                              Solscan ↗
+                            </a>
+                          )}
+                          {hasDFlow && !hasOnChain && dflowTrade && (
+                            <div className="text-amber/60">
+                              DFlow Test
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="tabular px-1.5 py-1 text-right text-amber">
                         {(avgPrice * 100).toFixed(1)}¢
                       </td>
                       <td className="px-1.5 py-1 text-center text-[8px] text-muted-foreground">
-                        {hasAgent && hasManual ? "Mixed" : hasAgent ? "Agent" : "Manual"}
+                        {hasOnChain ? "On-Chain" :
+                         hasDFlow ? "DFlow" :
+                         hasAgent && hasManual ? "Mixed" :
+                         hasAgent ? "Agent" : "Manual"}
                       </td>
                       <td className={`tabular px-1.5 py-1 text-right font-bold ${pnl >= 0 ? "text-yes" : "text-no"}`}>
                         {pnl >= 0 ? "+" : ""}{pnl.toFixed(0)}
