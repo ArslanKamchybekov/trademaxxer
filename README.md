@@ -1,14 +1,14 @@
 # TradeMaxxer
 
-**Autonomous news-to-trade execution engine for Solana prediction markets.**
+**Autonomous news-to-trade pipeline for prediction markets on Solana.**
 
-Real-time news ingestion, NLI-based signal classification via in-process ONNX inference, and on-chain execution — end-to-end in **16–69ms**. No human in the loop.
+Breaking news hits the wire. Our agents read it, reprice every relevant market, and execute trades via Jupiter Ultra on Solana. End-to-end in under 1 second. No human in the loop.
 
 ---
 
 <p align="center">
 
-**16ms** news-to-decision &nbsp;·&nbsp; **22M param** ONNX NLI model &nbsp;·&nbsp; **5,000+ markets** parallel eval &nbsp;·&nbsp; **$0/inference** local mode &nbsp;·&nbsp; **13-panel** Bloomberg Terminal UI
+**68ms** fastest decision · **20x** parallel market evals · **32 tokens** per inference · **<1s** news to trade · **Bloomberg Terminal** UI
 
 </p>
 
@@ -16,187 +16,153 @@ Real-time news ingestion, NLI-based signal classification via in-process ONNX in
 
 ## The Problem
 
-Prediction markets on Solana reprice based on real-world news. The window between a headline hitting the wire and the market adjusting is **seconds**. Manual traders can't react fast enough. LLM-based systems (GPT, Groq) are too slow (250ms+ per inference) and rate-limited. Most bots don't even attempt semantic understanding — they pattern-match keywords.
+Prediction markets reprice based on real-world news. The window between a headline hitting the wire and the market adjusting is seconds. Manual traders can't read, evaluate, and execute fast enough. By the time a human places a trade, the edge is gone.
 
 ## Our Approach
 
-TradeMaxxer frames news classification as a **Natural Language Inference** problem. Instead of asking an LLM "should I buy?", we treat each headline as a *premise* and each market question as a *hypothesis*, then measure entailment:
+TradeMaxxer is a fully autonomous pipeline that ingests live news, fans out AI evaluations across all relevant markets in parallel, and executes trades on Solana via Jupiter Ultra routing.
 
-| Premise (headline) | Hypothesis (market) | NLI Output | Action |
-|---|---|---|---|
-| "Fed raises rates 50bps in surprise move" | "Will the Fed cut rates before July?" | **Contradiction** | **NO** — sell |
-| "Iran strikes Israeli military base" | "Will the US engage in conflict with Iran?" | **Entailment** | **YES** — buy |
-| "Apple announces new MacBook colors" | "Will oil exceed $120/barrel?" | **Neutral** | **SKIP** — ignore |
-
-This runs on a 22M parameter DeBERTa model via ONNX Runtime — no GPU needed, no API calls, no rate limits. The entire inference stack fits in a 300MB container.
+**Core loop:**
+1. News headline arrives via WebSocket
+2. Tagger classifies topic + urgency in ~5ms
+3. Redis routes it only to relevant markets
+4. Modal spins up parallel Groq evaluations across all matching markets
+5. Each agent returns YES/NO/SKIP + a theoretical fair price in 32 JSON tokens
+6. Decisions with edge > 6% trigger Jupiter Ultra swaps on Solana
+7. Portfolio updates in real-time on the Bloomberg Terminal dashboard
 
 ## Architecture
 
 ```
-REAL-TIME NEWS ──→ INTAKE ──→ DISPATCH ──→ MODAL (ONNX NLI) ──→ EXECUTOR ──→ SOLANA
-     │              5ms         1ms          35ms inference        │
-     │                                       85ms total            │
-     └───────────────────── DASHBOARD ←────────────────────────────┘
-                         (13-panel Bloomberg Terminal)
+DBNews WS ──→ Tagger ──→ Redis Pub/Sub ──→ Modal Fan-Out ──→ Groq LLM ──→ Decision ──→ Jupiter Ultra ──→ Solana TX
+  ~0ms         ~5ms         <1ms             20× parallel      68ms fastest    6% threshold    ~85ms quote      ~400ms confirm
+                                                                                    │
+                                                                              ┌─────┴─────┐
+                                                                           Kalshi       Dashboard
+                                                                        (market registry)  (real-time UI)
 ```
 
 | Component | What it does | Latency |
 |---|---|---|
-| **News Feed** | WebSocket connection to DBNews (~2 stories/sec, spikes to 10+ during events) | Real-time stream |
-| **Intake / Tagger** | VADER sentiment, category extraction (geopolitics, macro, crypto, etc.), ticker detection | ~5ms |
-| **Direct Dispatch** | Tag-filter armed markets, chunk into batches of 50, fire parallel RPCs via `asyncio.gather()` | <1ms |
-| **Modal Agents** | ONNX Runtime NLI inference. One RPC evaluates 50 markets. 5k markets = 100 parallel RPCs, same wall-clock. | ~35ms inference |
-| **Executor** | Validates decision against position state, market conditions, and risk limits. Fires trades via Solana RPC. | ~10ms |
-| **Position Monitor** | Polls open positions for resolution, edge compression, contradicting signals, time decay. Auto-exits. | 30s interval |
-| **Market Registry** | Tag-indexed market data from on-chain state. Links Solana market addresses to agent configurations. | Cached |
-| **Dashboard** | 13-panel Bloomberg Terminal UI. Real-time WebSocket. Per-market agent toggles. CRT aesthetic. | <16ms render |
+| **DBNews WebSocket** | Persistent connection to Reuters, AP, Bloomberg feeds (~2 stories/sec) | Real-time stream |
+| **Tagger** | VADER sentiment + regex category extraction + keyword tagging | ~5ms |
+| **Redis Pub/Sub** | Tag-based fan-out. Markets subscribe only to relevant topic channels | <1ms |
+| **Modal Fan-Out** | Serverless containers evaluate all matching markets in parallel via `asyncio.gather()` | 20x concurrency |
+| **Groq LLM** | Llama 3.1 8B Instant. 32 JSON tokens: `{action, p}`. Temp 0.1, timeout 2s | 68ms fastest, ~250ms avg |
+| **Decision Engine** | Computes theoretical price. Skips if \|theo - current\| < 6%. Confidence = delta x 2 | <1ms |
+| **Jupiter Ultra** | Routes USDC/SOL swaps across Raydium, Orca pools for optimal execution | ~85ms quote |
+| **Solana TX** | On-chain swap confirmation in one slot | ~400ms |
+| **Kalshi Registry** | Fetches live prediction markets + streams orderbook prices via WebSocket | REST + WS |
+| **Dashboard** | Bloomberg Terminal UI. 13 panels, real-time WebSocket, CRT aesthetic | <16ms render |
 
 ## How a Trade Happens
 
 ```
-t=0ms     Reuters wire: "Fed raises rates 50bps in surprise move"
-t=2ms     Intake: dedup → VADER sentiment (-0.73) → categories [fed, macro]
-t=3ms     Dispatch: 4/312 armed markets match [fed] or [macro] tags
-t=4ms     Batch: 4 markets → 1 chunk → local ONNX inference
-t=20ms    ONNX tokenize + session.run() + softmax + postprocess completes
-t=22ms    Decisions: [{action: "NO", confidence: 0.81, market: "FedRateCut..."}, ...]
-t=23ms    Dashboard updated (fire-and-forget, non-blocking)
-t=25ms    Executor validates: position check → risk limits → order construction
-t=30ms    Solana RPC: sell order submitted
-t=800ms   Position confirmed on-chain
-t=48hrs   Market resolves → winnings claimed → PnL recorded
+t=0ms      Reuters wire: "Iran strikes Israeli military base in Negev"
+t=5ms      Tagger: categories [geopolitics, politics], urgency HIGH
+t=6ms      Redis: routed to 3/20 matching markets
+t=6ms      Modal: 3 Groq evals fired in parallel via asyncio.gather()
+t=340ms    Groq returns: {action: "YES", p: 91} for "Iran Strike" market
+t=341ms    Decision: theo=0.91, current=0.82, delta=0.09 > 0.06 threshold → TRADE
+t=341ms    Dashboard updated (fire-and-forget)
+t=426ms    Jupiter Ultra: USDC → SOL quote via Raydium
+t=826ms    Solana TX confirmed on-chain
 ```
 
-**16–69ms from headline to trade signal.** The entire inference pipeline runs in-process — zero network overhead.
+**68ms fastest decision. 340ms typical. <1s news to trade.**
 
-## Performance
+## Key Optimizations
 
-### Latency Breakdown (local ONNX, `--local` flag)
-
-```
-Stage                        Time        Cumulative
-──────────────────────────────────────────────────────
-Tagger (VADER + regex)       ~5ms        5ms
-Tag-filter + chunk           <1ms        6ms
-ONNX tokenize + inference    ~10-35ms    16-41ms
-Postprocess + return         ~1ms        17-42ms
-WS broadcast                 async       (non-blocking)
-──────────────────────────────────────────────────────
-Best case                                ~16ms
-Worst case                               ~69ms
-Typical                                  ~20-40ms
-```
-
-### Optimization Journey
-
-We iterated through 6 model versions to reach current performance:
-
-| Version | Model | Runtime | Inference | E2E (warm) | Why we moved on |
-|---------|-------|---------|-----------|-----------|-----------------|
-| v1 | Llama 3.3 70B | Groq API | 311ms | 658ms | Verbose output, unparseable responses |
-| v2 | Llama 3.3 70B | Groq API | ~300ms | 600ms | Still too slow for trading |
-| v3 | Llama 3.1 8B | Groq API | 249ms | 300ms | Rate limited at 6,000 TPM — dead at scale |
-| v4 | DeBERTa-v3-xsmall | PyTorch on Modal | ~40ms | 200ms | 1.5GB image, slow cold starts |
-| v5 | DeBERTa-v3-xsmall | ONNX on Modal | ~35ms | ~143ms | Modal RPC overhead 100-260ms |
-| **v6** | **DeBERTa-v3-xsmall** | **ONNX local** | **~16ms** | **~16-69ms** | **Current** |
-
-**4.3–18.8x faster than Groq. Zero rate limits. Zero API keys. Zero network.**
-
-### What We Optimized
-
-| Optimization | Latency saved | How |
+| Optimization | Impact | How |
 |---|---|---|
-| Groq LLM → ONNX NLI | **-215ms** | Replaced 8B LLM API call with 22M param ONNX model |
-| Redis hot path elimination | **-8ms** | In-process dispatch replaces publish→subscribe roundtrip |
-| PyTorch → ONNX Runtime | **-10ms** | Dropped autograd, GPU kernels, 1.2GB of torch |
-| Modal RPC → local inference | **-100–260ms** | In-process ONNX call, zero network overhead |
-| Blocking WS → fire-and-forget | **-5ms** | `asyncio.create_task()` for all non-critical I/O |
-| Per-market RPC → batched | **cost + variance** | 1 call per 50 markets vs N concurrent RPCs — reduces scheduling contention and container sprawl |
-| Image size: 1.5GB → 300MB | **-1.5s cold** | Faster container provisioning (Modal mode) |
-
-### Scaling Characteristics
-
-| Markets | Chunks (batch=50) | Parallel calls | Wall-clock time |
-|---|---|---|---|
-| 1 | 1 | 1 | ~16-40ms |
-| 50 | 1 | 1 | ~30-69ms |
-| 500 | 10 | 10 (threaded) | ~30-69ms |
-| 5,000 | 100 | 100 (Modal) | ~85ms (cloud) |
-
-Local mode: wall-clock scales slightly with batch size but stays sub-70ms for reasonable market counts. For 5k+ markets, Modal cloud mode with parallel RPCs is still available via `--local` omission.
-
-## Confidence Scaling
-
-Raw NLI confidence is adjusted by current market probability to avoid trading signals that are already priced in:
-
-| Action | Formula | Intuition |
-|---|---|---|
-| YES | `confidence × (1 - market_prob)` | YES at 95% prob → already priced in → discount |
-| NO | `confidence × market_prob` | NO at 5% prob → already priced in → discount |
-| SKIP | `confidence × 0.5` | Low-signal, always halved |
-
-Example: Headline entails "Fed will cut" for a market at 95% YES. Raw confidence 0.90 → scaled `0.90 × 0.05 = 0.045`. **Don't trade** — the market already knows.
-
-## Dynamic Market Management
-
-Markets default to **OFF**. Operators arm specific markets from the dashboard — only armed markets consume compute and generate trades.
-
-- **Toggle:** Per-market agent toggle in the Markets panel
-- **Server-authoritative:** Backend owns the `enabled_markets` set, validates all toggle commands
-- **Tag-filter:** Armed markets only evaluate when story tags overlap with market tags
-- **Visual feedback:** Unarmed markets dimmed at 30% opacity, header shows "X/Y armed"
-
-At scale (5,000+ markets from on-chain registry), this is essential. You arm markets where you have informational edge, not all of them.
+| **Modal Serverless Fan-Out** | 20x parallel evals, same wall-clock | `asyncio.gather()` across all matching markets on auto-scaling containers |
+| **Groq 32-Token Inference** | 68ms fastest decision | Minimal JSON output: just action + probability. No verbose reasoning. |
+| **Jupiter Ultra Routing** | Optimal swap execution | Routes across Solana DEX liquidity pools for best price |
+| **Tag-Based Pub/Sub** | ~80% irrelevant pairs dropped | Redis routes headlines by topic. Agents only see news they care about |
+| **Fire-and-forget broadcasts** | -5ms per decision | `asyncio.create_task()` for all non-critical I/O |
+| **Singleton Modal handle** | -2ms per call | Module-level agent reference, initialized once |
 
 ## Dashboard
 
-Bloomberg Terminal-style real-time operations UI. 13 panels, all updating via WebSocket. Monospace font (JetBrains Mono), pure black background, CRT scanline overlay, zero border-radius.
+Bloomberg Terminal-style real-time operations UI. Monospace font (JetBrains Mono), pure black background, CRT scanline overlay, zero border-radius.
 
 | Panel | Purpose |
 |---|---|
-| **Terminal Header** | Connection status (WS/Kalshi/Polymarket/ONNX), throughput (ev/s, dec/s), hit rate, YES%, uptime, UTC clock |
-| **Ticker Tape** | Auto-scrolling ribbon of latest decisions with action, confidence, latency |
-| **News Wire** | Incoming headlines with urgency badges, sentiment, category tags, velocity |
-| **Markets** | Armed/disarmed markets with probability, signal strength, action counts, sparklines |
-| **Position Book** | Per-market YES/NO pressure bars, average confidence, simulated P&L |
-| **Decision Feed** | Full decision details — action, confidence bar, latency, reasoning, source headline |
-| **Tag Heatmap** | Category frequency distribution with intensity-scaled tiles |
-| **Latency Chart** | Real-time per-decision latency line chart |
-| **Throughput Chart** | Events/sec and decisions/sec area chart (120-point rolling window) |
-| **Confidence Histogram** | Distribution across 5 buckets with mean (μ) and sample size |
-| **Decision Distribution** | YES/NO/SKIP totals bar chart |
-| **Latency Stats** | MIN / P50 / AVG / P95 / P99 / MAX with standard deviation |
-| **System Bar** | Aggregate rates, action breakdowns, min/max latency, connection status |
+| **Terminal Header** | Connection status, throughput (ev/s, dec/s), hit rate, uptime, UTC clock |
+| **Ticker Tape** | Auto-scrolling ribbon of latest decisions |
+| **News Wire** | Incoming headlines with urgency, sentiment, tags |
+| **Markets** | Armed/disarmed markets with probability, signal strength, agent toggles |
+| **Solana Wallet** | Portfolio value, P&L, USDC balance, Jupiter swap history, contract count |
+| **Decision Feed** | Full decision details with theo price, confidence, latency |
+| **Tag Heatmap** | Category frequency with intensity-scaled tiles |
+| **Latency Chart** | Real-time per-decision latency |
+| **Throughput Chart** | Events/sec and decisions/sec (120-point rolling window) |
+| **Confidence Histogram** | Distribution with mean and sample size |
+| **Decision Distribution** | YES/NO/SKIP bar chart |
+| **Latency Stats** | MIN / P50 / AVG / P95 / P99 / MAX |
+| **System Bar** | Aggregate rates, action breakdowns, connection status |
+
+## Demo Mode
+
+TradeMaxxer ships with a full demo system that runs without any external API keys:
+
+- **7 demo contracts** modeled after Kalshi markets (Iran strike, Fed rate cut, Bitcoin $150k, etc.)
+- **~40 synthetic headlines** injected every 8-25 seconds covering geopolitics, oil, Fed, crypto, VIX
+- **Mock agents** return randomized YES/NO/SKIP decisions with realistic latency
+- **Jupiter wallet** simulates USDC/SOL swaps and portfolio tracking
+
+```bash
+./start.sh --mock    # everything runs locally, zero dependencies
+```
+
+## Presentation
+
+Interactive Reveal.js presentation in the `presentation/` folder with:
+
+- Bloomberg Terminal aesthetic matching the dashboard
+- Animated charts and visualizations (Framer Motion + Recharts)
+- Interactive architecture flow (click nodes for details)
+- Fintech/Simple mode toggle for audience adaptation
+- Prediction markets explainer slide
+
+```bash
+cd presentation && pnpm dev --port 5174
+```
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.11+, Node.js 18+
+- Python 3.11+, Node.js 18+, pnpm
 - [Modal](https://modal.com) account (free tier works)
+- [Groq](https://groq.com) API key
 - Redis (live mode only)
 
 ### Setup
 
 ```bash
-# 1. Server
+# Server
 cd server
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# 2. Modal
+# Modal
 pip install modal
-modal setup                              # authenticate (opens browser)
-modal deploy agents/modal_app.py    # deploy ONNX NLI agent (~2 min)
+modal setup
+modal deploy agents/modal_app.py
 
-# 3. Frontend
-cd client/client && npm install
+# Frontend
+cd client/client && pnpm install
 
-# 4. Environment (live mode only)
+# Presentation (optional)
+cd presentation && pnpm install
+
+# Environment (live mode only)
 cat > server/.env << 'EOF'
 DBNEWS_USERNAME=...
 DBNEWS_PASSWORD=...
 DBNEWS_WS_URL=wss://dbws.io
+GROQ_API_KEY=...
 REDIS_URL=redis://localhost:6379/0
 EOF
 ```
@@ -204,82 +170,45 @@ EOF
 ### Run
 
 ```bash
-./start.sh --mock    # demo mode — no external services, instant setup
-./start.sh           # live mode — real news feed + Modal inference
+./start.sh --mock    # demo mode: no external services needed
+./start.sh --local   # live news + local Groq inference
+./start.sh           # live news + Modal cloud inference
 ```
 
-Open **http://localhost:5173** — dashboard populates immediately.
-
-### Verify Modal
-
-```bash
-cd server && python3 -c "
-import modal, asyncio
-agent = modal.Cls.from_name('trademaxxer-agents-fast', 'FastMarketAgent')()
-result = asyncio.run(agent.evaluate_batch.remote.aio([
-    {'headline': 'Fed raises rates 50bps', 'question': 'Will the Fed cut rates?',
-     'probability': 0.5, 'market_address': 'test', 'story_id': 'test'}
-]))
-print(result)
-"
-```
-
-## Infrastructure
-
-```
-VPS ($5/mo)                          Modal (pay per use)
-├── News WebSocket client            └── ONNX NLI containers
-├── Intake / tagger                      ├── buffer_containers=1 (always warm)
-├── Direct dispatcher                    ├── scaledown_window=300s
-├── Executor                             └── auto-scales 0→N
-├── Position monitor
-├── Market registry cache
-├── WebSocket server
-└── Redis (pub/sub + state)
-
-Vercel (free)
-└── React dashboard
-```
-
-| Component | Host | Monthly Cost |
-|---|---|---|
-| Server (news + dispatch + executor) | VPS | ~$5 |
-| Redis | Local on VPS | $0 |
-| ONNX NLI inference | Modal | ~$0.001/story |
-| Dashboard | Vercel | $0 |
-| **Total** | | **~$5–10/mo** |
-
-For context: a single Groq API call at scale costs more per day than our entire monthly infrastructure.
+Dashboard: **http://localhost:5173**
 
 ## Tech Stack
 
 **Built from scratch:**
-- News ingestion pipeline — WebSocket client, normalizer, VADER tagger, category extraction
-- NLI classification engine — ONNX Runtime inference, probability-aware confidence scaling, batched evaluation
-- Direct dispatch system — tag-filtering, chunked parallel RPCs, fire-and-forget broadcasting
-- Execution layer — decision validation, position management, risk controls
-- Market registry — on-chain state indexing, tag-based market lookup
-- Bloomberg Terminal dashboard — 13 real-time panels, WebSocket state management, CRT aesthetic
-- Mock system — 100 headlines, simulated agents, full offline pipeline
+- News ingestion pipeline: WebSocket client, normalizer, VADER tagger, category extraction
+- Agent evaluation: Groq LLM classification, probability-aware confidence scaling, parallel fan-out
+- Direct dispatch: tag-filtering, chunked parallel RPCs, fire-and-forget broadcasting
+- Solana wallet: Jupiter Ultra API integration, USDC/SOL swap simulation, portfolio tracking
+- Market registry: Kalshi API integration, tag-based market lookup, live price streaming
+- Bloomberg Terminal dashboard: 13 real-time panels, WebSocket state management, CRT aesthetic
+- Demo system: 7 contracts, 40 headlines, mock agents, synthetic injector
+- Reveal.js presentation: animated slides, interactive architecture, fintech mode toggle
 - Single-command launcher (`start.sh`)
 
 **Third-party:**
-- [DeBERTa-v3-xsmall](https://huggingface.co/cross-encoder/nli-deberta-v3-xsmall) — pretrained NLI model (22M params)
-- [ONNX Runtime](https://onnxruntime.ai/) — optimized CPU inference
-- [Modal](https://modal.com) — serverless container orchestration
-- [DBNews](https://dbnews.ai) — real-time financial news WebSocket feed
-- [Redis](https://redis.io) — pub/sub messaging + state
-- [VADER](https://github.com/cjhutto/vaderSentiment) — financial sentiment analysis
-- [Recharts](https://recharts.org) — chart rendering
-- React + Vite + Tailwind CSS — frontend
+- [Groq](https://groq.com) + Llama 3.1 8B Instant: LLM inference
+- [Modal](https://modal.com): serverless container orchestration
+- [Jupiter Ultra API](https://station.jup.ag/docs/ultra): Solana DEX aggregation
+- [DBNews](https://dbnews.ai): real-time financial news WebSocket
+- [Kalshi](https://kalshi.com): prediction market data + live prices
+- [Redis](https://redis.io): pub/sub messaging
+- [VADER](https://github.com/cjhutto/vaderSentiment): financial sentiment
+- React + Vite: frontend
+- Reveal.js + Framer Motion + Recharts: presentation
 
 ## Repo Structure
 
 ```
 trademaxxer/
 ├── server/
-│   ├── main.py                          # Orchestrator — news, dispatch, execution
-│   ├── mock_feed.py                     # 100 headlines + mock evaluator
+│   ├── main.py                          # Orchestrator: news, dispatch, execution
+│   ├── demo_markets.py                  # 7 demo contracts + synthetic headline injector
+│   ├── mock_feed.py                     # Mock headlines + mock evaluator
 │   ├── requirements.txt
 │   ├── news_streamer/
 │   │   ├── config.py                    # Environment configuration
@@ -289,29 +218,44 @@ trademaxxer/
 │   │   ├── ws_server/server.py          # WebSocket broadcast server
 │   │   └── pubsub/                      # Redis pub/sub fan-out
 │   ├── agents/
+│   │   ├── agent_logic.py               # Core evaluate(): news + market → Groq → decision
 │   │   ├── schemas.py                   # MarketConfig, StoryPayload, Decision
-│   │   ├── nli_postprocess.py           # NLI logits → action + confidence scaling
-│   │   ├── modal_app_fast.py            # Modal ONNX NLI deployment
+│   │   ├── prompts.py                   # v6 prompt: 32-token JSON output
+│   │   ├── groq_client.py              # Async Groq wrapper (llama-3.1-8b-instant)
+│   │   ├── modal_app.py                # Modal deployment (MarketAgent)
 │   │   └── listener.py                  # Per-market Redis subscriber
-│   └── pub_sub_feed/                    # Redis pub/sub library
+│   └── market_registry/
+│       ├── kalshi.py                    # Kalshi REST API: events → MarketConfig
+│       └── kalshi_ws.py                 # Kalshi WebSocket: live orderbook prices
 ├── client/client/
 │   ├── src/
 │   │   ├── App.jsx                      # 3-column Bloomberg Terminal layout
 │   │   ├── index.css                    # Terminal theme + CRT animations
 │   │   ├── hooks/useWebSocket.js        # State management + metrics
-│   │   └── components/                  # 13 dashboard panels
+│   │   └── components/
+│   │       ├── SolanaWallet.jsx         # Jupiter Ultra swaps, portfolio, P&L
+│   │       ├── MarketGrid.jsx           # Market toggles + signal strength
+│   │       ├── DecisionFeed.jsx         # Agent decisions with theo prices
+│   │       ├── OrderTicket.jsx          # Manual order entry
+│   │       ├── PositionBook.jsx         # Combined positions
+│   │       └── ModalAgentPanel.jsx      # Agent stats panel
+│   └── package.json
+├── presentation/
+│   ├── src/
+│   │   ├── App.jsx                      # Reveal.js slides (7 sections)
+│   │   └── index.css                    # Bloomberg Terminal presentation theme
 │   └── package.json
 ├── start.sh                             # One-command launcher
-├── ARCHITECTURE.md                      # Mermaid diagrams — all system flows
+├── ARCHITECTURE.md                      # System flow diagrams
 ├── DEVLOG.md                            # Development log with benchmarks
 └── README.md
 ```
 
-## Development Log
+## Team
 
-Full technical narrative with benchmarks, architecture decisions, and war stories in [DEVLOG.md](DEVLOG.md).
-
-System flow diagrams (mermaid) in [ARCHITECTURE.md](ARCHITECTURE.md).
+- **Anirudh Kuppili** · Eng. @ Aparavi (Series A)
+- **Arslan Kamchybekov** · Founding Eng. @ Kairos (backed by Jump Trading & a16z)
+- **Mathew Randall** · Prev @ Optiver, Incoming @ Etched.ai
 
 ## License
 
