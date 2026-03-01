@@ -9,7 +9,7 @@ Visual reference for every system flow, optimization decision, and data path. Al
 ```mermaid
 graph TB
     subgraph Internet["External"]
-        DB["DBNews WebSocket<br/>~2 stories/sec"]
+        DB["WorldMonitor WebSocket<br/>~2 stories/sec"]
         MODAL["Modal Cloud<br/>ONNX NLI Containers"]
     end
 
@@ -122,7 +122,7 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-    participant DB as DBNews
+    participant DB as WorldMonitor
     participant S as Server
     participant T as Tagger
     participant D as Dispatcher

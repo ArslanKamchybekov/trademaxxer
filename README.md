@@ -34,7 +34,7 @@ TradeMaxxer is a fully autonomous pipeline that ingests live news, fans out AI e
 ## Architecture
 
 ```
-DBNews WS ──→ Tagger ──→ Redis Pub/Sub ──→ Modal Fan-Out ──→ Groq LLM ──→ Decision ──→ Jupiter Ultra ──→ Solana TX
+WorldMonitor WS ──→ Tagger ──→ Redis Pub/Sub ──→ Modal Fan-Out ──→ Groq LLM ──→ Decision ──→ Jupiter Ultra ──→ Solana TX
   ~0ms         ~5ms         <1ms             20× parallel      68ms fastest    6% threshold    ~85ms quote      ~400ms confirm
                                                                                     │
                                                                               ┌─────┴─────┐
@@ -44,7 +44,7 @@ DBNews WS ──→ Tagger ──→ Redis Pub/Sub ──→ Modal Fan-Out ─�
 
 | Component | What it does | Latency |
 |---|---|---|
-| **DBNews WebSocket** | Persistent connection to Reuters, AP, Bloomberg feeds (~2 stories/sec) | Real-time stream |
+| **WorldMonitor WebSocket** | Persistent connection to Reuters, AP, Bloomberg feeds (~2 stories/sec) | Real-time stream |
 | **Tagger** | VADER sentiment + regex category extraction + keyword tagging | ~5ms |
 | **Redis Pub/Sub** | Tag-based fan-out. Markets subscribe only to relevant topic channels | <1ms |
 | **Modal Fan-Out** | Serverless containers evaluate all matching markets in parallel via `asyncio.gather()` | 20x concurrency |
@@ -159,9 +159,9 @@ cd presentation && pnpm install
 
 # Environment (live mode only)
 cat > server/.env << 'EOF'
-DBNEWS_USERNAME=...
-DBNEWS_PASSWORD=...
-DBNEWS_WS_URL=wss://dbws.io
+WORLDMONITOR_USERNAME=...
+WORLDMONITOR_PASSWORD=...
+WORLDMONITOR_WS_URL=wss://worldmonitor.io
 GROQ_API_KEY=...
 REDIS_URL=redis://localhost:6379/0
 EOF
@@ -194,7 +194,7 @@ Dashboard: **http://localhost:5173**
 - [Groq](https://groq.com) + Llama 3.1 8B Instant: LLM inference
 - [Modal](https://modal.com): serverless container orchestration
 - [Jupiter Ultra API](https://station.jup.ag/docs/ultra): Solana DEX aggregation
-- [DBNews](https://dbnews.ai): real-time financial news WebSocket
+- [WorldMonitor](https://worldmonitor.io): real-time financial news WebSocket
 - [Kalshi](https://kalshi.com): prediction market data + live prices
 - [Redis](https://redis.io): pub/sub messaging
 - [VADER](https://github.com/cjhutto/vaderSentiment): financial sentiment
@@ -213,7 +213,7 @@ trademaxxer/
 │   ├── news_streamer/
 │   │   ├── config.py                    # Environment configuration
 │   │   ├── models/news.py               # RawNewsItem, TaggedNewsItem
-│   │   ├── dbnews_client/client.py      # DBNews WebSocket with auto-reconnect
+│   │   ├── dbnews_client/client.py      # WorldMonitor WebSocket with auto-reconnect
 │   │   ├── tagger/tagger.py             # Sentiment + category + ticker extraction
 │   │   ├── ws_server/server.py          # WebSocket broadcast server
 │   │   └── pubsub/                      # Redis pub/sub fan-out

@@ -781,8 +781,8 @@ function SolutionSlide() {
 function getFlowNodes(fin) {
   return [
     {
-      id: "news", label: "DBNews WS", sub: fin ? "Reuters · AP · Bloomberg" : "Live news feed",
-      color: "var(--primary)", tech: "wss://dbws.io · ~2 stories/sec",
+      id: "news", label: "WorldMonitor", sub: fin ? "Reuters · AP · Bloomberg" : "Live news feed",
+      color: "var(--primary)", tech: "wss://worldmonitor.io · ~2 stories/sec",
       detail: fin
         ? "Persistent WebSocket with exponential backoff reconnect. Normalizes raw JSON → RawNewsItem. Drops non-English."
         : "Always-on connection to a news wire. Receives headlines instantly and filters to English only.",
