@@ -9,6 +9,7 @@ export default function OrderTicket({
   const [selectedMarket, setSelectedMarket] = useState(null)
   const [orderSide, setOrderSide] = useState("YES") // "YES" or "NO"
   const [orderSize, setOrderSize] = useState("100")
+  const [executionVenue, setExecutionVenue] = useState("simulation") // "simulation", "kairos", "dflow"
 
   // Filter to markets that have pricing data
   const tradableMarkets = markets.filter(market => {
@@ -16,7 +17,7 @@ export default function OrderTicket({
     return market.current_probability > 0
   })
 
-  const handlePlaceOrder = () => {
+  const handlePlaceOrder = async () => {
     if (!selectedMarket) return
 
     const order = {
@@ -25,7 +26,47 @@ export default function OrderTicket({
       size: parseFloat(orderSize),
       price: selectedMarket.current_probability,
       timestamp: Date.now(),
-      mode: mode
+      mode: mode,
+      venue: executionVenue
+    }
+
+    // Execute based on venue
+    if (executionVenue === "dflow") {
+      try {
+        const response = await fetch('http://localhost:8767/api/execute-trade', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            market_id: selectedMarket.address,
+            side: orderSide,
+            size: parseFloat(orderSize)
+          })
+        })
+
+        const result = await response.json()
+
+        if (result.success) {
+          console.log('DFlow trade executed:', result)
+          // Add DFlow-specific data to order
+          order.tx_hash = result.tx_hash
+          order.venue = 'dflow'
+          order.dflow_market_id = result.dflow_market_id
+        } else {
+          console.error('DFlow trade failed:', result.error)
+          alert(`Trade failed: ${result.error}`)
+          return
+        }
+      } catch (error) {
+        console.error('DFlow execution error:', error)
+        alert(`Trade execution error: ${error.message}`)
+        return
+      }
+    } else if (executionVenue === "kairos") {
+      // Future: Kairos execution (currently simulation only)
+      console.log('Kairos execution not yet implemented, using simulation')
+      order.venue = 'simulation'
     }
 
     onPlaceOrder?.(order)
@@ -182,8 +223,33 @@ export default function OrderTicket({
 
         {selectedMarket && (
           <>
+            {/* Execution Venue Selection */}
+            <div>
+              <label className="text-[9px] uppercase text-muted-foreground">
+                Execution Venue
+              </label>
+              <select
+                value={executionVenue}
+                onChange={(e) => setExecutionVenue(e.target.value)}
+                className="w-full mt-1 text-[10px] bg-background border border-border rounded px-2 py-1"
+              >
+                <option value="simulation">Simulation</option>
+                <option value="dflow">DFlow (On-Chain)</option>
+                <option value="kairos" disabled>Kairos (Coming Soon)</option>
+              </select>
+              <div className="mt-1 text-[8px] text-muted-foreground">
+                {executionVenue === "simulation" && "Practice trading with virtual funds"}
+                {executionVenue === "dflow" && "Execute real trades on Solana via DFlow"}
+                {executionVenue === "kairos" && "Execute real trades via Kairos API"}
+              </div>
+            </div>
+
             {/* Pricing Display */}
-            <div className="bg-muted/20 rounded p-2 space-y-1">
+            <div className={`rounded p-2 space-y-1 ${
+              executionVenue === "dflow" ? "bg-amber/10 border border-amber/30" :
+              executionVenue === "kairos" ? "bg-blue/10 border border-blue/30" :
+              "bg-muted/20"
+            }`}>
               <div className="flex justify-between text-[10px]">
                 <span>YES Price:</span>
                 <span className="font-mono text-yes">
@@ -284,13 +350,26 @@ export default function OrderTicket({
             </div>
 
             {/* Submit Button */}
-            <button
-              onClick={handlePlaceOrder}
-              disabled={!selectedMarket || !orderSize}
-              className="w-full py-2 px-2 text-[10px] font-bold uppercase bg-primary text-primary-foreground rounded hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              Place Order
-            </button>
+            <div>
+              {executionVenue === "dflow" && (
+                <div className="mb-2 p-2 bg-amber/10 border border-amber/30 rounded text-[9px] text-amber">
+                  ⚠️ Real on-chain transaction using Solana
+                </div>
+              )}
+              <button
+                onClick={handlePlaceOrder}
+                disabled={!selectedMarket || !orderSize}
+                className={`w-full py-2 px-2 text-[10px] font-bold uppercase rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all ${
+                  executionVenue === "dflow" ? "bg-amber text-black" :
+                  executionVenue === "kairos" ? "bg-blue text-white" :
+                  "bg-primary text-primary-foreground"
+                }`}
+              >
+                {executionVenue === "dflow" ? "Execute On-Chain" :
+                 executionVenue === "kairos" ? "Execute Live" :
+                 "Place Simulation Order"}
+              </button>
+            </div>
           </>
         )}
 

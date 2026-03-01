@@ -392,6 +392,193 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         f"ws://{settings.websocket_server.host}:{settings.websocket_server.port}"
     )
 
+    # ── HTTP API Server ────────────────────────────────────────────
+    from aiohttp import web, hdrs
+    from aiohttp.web_runner import AppRunner, TCPSite
+    from execution.dflow_executor import DFlowExecutor
+    from execution.market_mapper import get_market_mapper
+    import json
+
+    # Initialize DFlow executor and market mapper
+    dflow_executor = None
+    market_mapper = get_market_mapper()
+
+    try:
+        dflow_executor = DFlowExecutor()
+        await dflow_executor.__aenter__()
+
+        # Fetch DFlow markets and create mappings
+        dflow_markets_data = await dflow_executor.get_dflow_markets()
+        kalshi_markets_data = [m.to_dict() for m in markets if m.address not in demo_addrs]
+
+        mappings = market_mapper.create_mappings(kalshi_markets_data,
+            [{"market_id": m.dflow_market_id, "question": m.question} for m in dflow_markets_data])
+
+        market_mapper.print_mapping_summary()
+        logger.info(f"DFlow executor initialized with {len(mappings)} market mappings")
+    except Exception as e:
+        logger.warning(f"Failed to initialize DFlow executor: {e}")
+
+    async def handle_cors(request):
+        """Handle CORS preflight requests"""
+        return web.Response(
+            headers={
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            }
+        )
+
+    async def execute_trade_handler(request):
+        """Execute a trade via DFlow on-chain"""
+        try:
+            # CORS headers
+            headers = {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            }
+
+            if request.method == 'OPTIONS':
+                return web.Response(headers=headers)
+
+            data = await request.json()
+            kalshi_ticker = data.get('market_id')
+            side = data.get('side')  # "YES" or "NO"
+            size = data.get('size', 100)  # USD amount
+
+            if not dflow_executor:
+                return web.json_response({
+                    'success': False,
+                    'error': 'DFlow executor not available'
+                }, headers=headers, status=500)
+
+            # Get DFlow market ID from mapping
+            dflow_market_id = market_mapper.get_dflow_market_id(kalshi_ticker)
+
+            # TEST MODE: If no mapping found, create a mock one for demo
+            if not dflow_market_id:
+                # Check if wallet has 0 SOL balance (test mode)
+                wallet_info = await dflow_executor.get_wallet_balance()
+                if wallet_info.get("sol_balance", 0) == 0:
+                    logger.info(f"TEST MODE: Creating mock DFlow mapping for {kalshi_ticker}")
+                    dflow_market_id = f"mock-dflow-{kalshi_ticker[-8:]}"
+                else:
+                    return web.json_response({
+                        'success': False,
+                        'error': f'No DFlow mapping found for market {kalshi_ticker}'
+                    }, headers=headers, status=400)
+
+            # Execute the trade
+            from execution.dflow_executor import DFlowTradeRequest
+            trade_req = DFlowTradeRequest(
+                market_id=dflow_market_id,
+                side=side,
+                size=float(size)
+            )
+
+            result = await dflow_executor.execute_trade(trade_req)
+
+            # Broadcast trade result to WebSocket clients
+            if result.get('success'):
+                await ws_server.broadcast_json({
+                    "type": "trade_executed",
+                    "data": {
+                        "venue": "dflow",
+                        "kalshi_ticker": kalshi_ticker,
+                        "dflow_market_id": dflow_market_id,
+                        "side": side,
+                        "size": size,
+                        "tx_hash": result.get('tx_hash'),
+                        "timestamp": result.get('timestamp')
+                    }
+                })
+
+            return web.json_response(result, headers=headers)
+
+        except Exception as e:
+            logger.error(f"Trade execution error: {e}")
+            return web.json_response({
+                'success': False,
+                'error': str(e)
+            }, headers={'Access-Control-Allow-Origin': '*'}, status=500)
+
+    async def get_wallet_handler(request):
+        """Get wallet balance and info"""
+        headers = {'Access-Control-Allow-Origin': '*'}
+
+        if not dflow_executor:
+            return web.json_response({
+                'error': 'DFlow executor not available'
+            }, headers=headers, status=500)
+
+        try:
+            balance_info = await dflow_executor.get_wallet_balance()
+            return web.json_response(balance_info, headers=headers)
+        except Exception as e:
+            logger.error(f"Wallet balance error: {e}")
+            return web.json_response({
+                'error': str(e)
+            }, headers=headers, status=500)
+
+    async def get_dflow_markets_handler(request):
+        """Get available DFlow markets"""
+        headers = {'Access-Control-Allow-Origin': '*'}
+
+        if not dflow_executor:
+            return web.json_response({
+                'error': 'DFlow executor not available'
+            }, headers=headers, status=500)
+
+        try:
+            dflow_markets_data = await dflow_executor.get_dflow_markets()
+            markets_with_mappings = []
+
+            for market in dflow_markets_data:
+                market_info = {
+                    'dflow_market_id': market.dflow_market_id,
+                    'address': market.address,
+                    'question': market.question,
+                    'current_probability': market.current_probability,
+                    'outcome_a': market.outcome_a,
+                    'outcome_b': market.outcome_b,
+                    'mapped_kalshi_ticker': None
+                }
+
+                # Find if this DFlow market is mapped to any Kalshi ticker
+                for ticker, mapping in market_mapper.mappings.items():
+                    if mapping.dflow_market_id == market.dflow_market_id:
+                        market_info['mapped_kalshi_ticker'] = ticker
+                        market_info['mapping_confidence'] = mapping.confidence_score
+                        break
+
+                markets_with_mappings.append(market_info)
+
+            return web.json_response({
+                'markets': markets_with_mappings,
+                'total_mappings': len(market_mapper.mappings)
+            }, headers=headers)
+
+        except Exception as e:
+            logger.error(f"DFlow markets error: {e}")
+            return web.json_response({
+                'error': str(e)
+            }, headers=headers, status=500)
+
+    # Create HTTP app and routes
+    app = web.Application()
+    app.router.add_options('/api/execute-trade', handle_cors)
+    app.router.add_post('/api/execute-trade', execute_trade_handler)
+    app.router.add_get('/api/wallet', get_wallet_handler)
+    app.router.add_get('/api/dflow-markets', get_dflow_markets_handler)
+
+    # Start HTTP server
+    http_runner = AppRunner(app)
+    await http_runner.setup()
+    http_site = TCPSite(http_runner, settings.websocket_server.host, 8767)
+    await http_site.start()
+    logger.info(f"HTTP API server listening on http://{settings.websocket_server.host}:8767")
+
     mock_task: asyncio.Task | None = None
     demo_task: asyncio.Task | None = None
 
@@ -447,6 +634,22 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
                 pass
 
     await ws_server.stop()
+
+    # Stop HTTP API server
+    if 'http_runner' in locals():
+        try:
+            await http_runner.cleanup()
+            logger.info("Stopped HTTP API server")
+        except Exception as e:
+            logger.warning(f"Error stopping HTTP server: {e}")
+
+    # Stop DFlow executor
+    if dflow_executor:
+        try:
+            await dflow_executor.__aexit__(None, None, None)
+            logger.info("Stopped DFlow executor")
+        except Exception as e:
+            logger.warning(f"Error stopping DFlow executor: {e}")
 
     # Stop live market updates
     if live_market_manager:

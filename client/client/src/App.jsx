@@ -14,7 +14,7 @@ import DecisionChart from "@/components/DecisionChart"
 import ModalAgentPanel from "@/components/ModalAgentPanel"
 import MarketActivity from "@/components/MarketActivity"
 import TagHeatmap from "@/components/TagHeatmap"
-import SolanaWallet from "@/components/SolanaWallet"
+import DFlowWallet from "@/components/DFlowWallet"
 import SystemBar from "@/components/SystemBar"
 import OrderTicket from "@/components/OrderTicket"
 
@@ -142,7 +142,7 @@ export default function App() {
             <PositionBook markets={markets} marketStats={marketStats} allTrades={allTrades} />
           </div>
           <div className="flex-[3] overflow-hidden border-b border-border">
-            <SolanaWallet decisions={decisions} markets={markets} />
+            <DFlowWallet />
           </div>
           <div className="flex-[1] overflow-hidden">
             <TagHeatmap tagStats={tagStats} />
