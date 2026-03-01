@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { createContext, useContext, useEffect, useRef, useState } from "react"
 import Reveal from "reveal.js"
 import { motion, AnimatePresence } from "framer-motion"
 import {
@@ -6,6 +6,13 @@ import {
   XAxis, YAxis, CartesianGrid, ReferenceLine, ReferenceArea,
   Tooltip,
 } from "recharts"
+
+const FintechCtx = createContext(true)
+function useFin() { return useContext(FintechCtx) }
+function T({ fin, simple }) {
+  const fintech = useFin()
+  return fintech ? fin : simple
+}
 
 // ── Chart data generators ──
 
@@ -68,19 +75,19 @@ function ChartPanel({ title, value, valueColor, children }) {
   return (
     <div style={{
       background: "var(--card)", border: "1px solid var(--border)",
-      padding: "8px 10px", marginBottom: "6px",
+      padding: "10px 12px", marginBottom: "0",
     }}>
       <div style={{
         display: "flex", justifyContent: "space-between", alignItems: "center",
         marginBottom: "4px",
       }}>
         <span style={{
-          fontSize: "10px", fontWeight: 700, color: "var(--muted)",
+          fontSize: "12px", fontWeight: 700, color: "var(--muted)",
           letterSpacing: "0.1em", textTransform: "uppercase",
         }}>
           {title}
         </span>
-        <span style={{ fontSize: "10px", fontWeight: 700, color: valueColor }}>
+        <span style={{ fontSize: "12px", fontWeight: 700, color: valueColor }}>
           {value}
         </span>
       </div>
@@ -117,13 +124,13 @@ function NewsTicker({ active }) {
           style={{ display: "flex", alignItems: "center", gap: "8px" }}
         >
           <span style={{
-            fontSize: "8px", fontWeight: 700, color: "var(--no)",
-            padding: "1px 4px", border: "1px solid var(--no)",
+            fontSize: "11px", fontWeight: 700, color: "var(--no)",
+            padding: "2px 6px", border: "1px solid var(--no)",
             letterSpacing: "0.08em", flexShrink: 0,
           }}>
             BREAKING
           </span>
-          <span style={{ fontSize: "10px", color: "var(--fg)" }}>
+          <span style={{ fontSize: "8px", color: "var(--fg)" }}>
             {HEADLINES[idx]}
           </span>
         </motion.div>
@@ -132,9 +139,191 @@ function NewsTicker({ active }) {
   )
 }
 
+// ── Prediction Markets explainer ──
+
+const PM_EXAMPLES = [
+  { question: "Will Iran strike Israel by June?", yes: "82¢", no: "18¢", tag: "Geopolitics" },
+  { question: "Will the Fed cut rates in March?", yes: "34¢", no: "66¢", tag: "Macro" },
+  { question: "Will Bitcoin hit $100k this year?", yes: "57¢", no: "43¢", tag: "Crypto" },
+]
+
+function PredictionMarketsSlide({ fintech, setFintech }) {
+  const [active, setActive] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => setActive(e.isIntersecting),
+      { threshold: 0.5 },
+    )
+    if (ref.current) obs.observe(ref.current)
+    return () => obs.disconnect()
+  }, [])
+
+  return (
+    <section ref={ref}>
+      <div className="term-bar">
+        <span className="title">CONTEXT</span>
+        <span className="meta">PREDICTION MARKETS 101</span>
+      </div>
+
+      <span className="section-label">What is your fintech knowledge?</span>
+      <h2 style={{ fontSize: "1.3em" }}>
+        TOGGLE OFF FOR SIMPLE EXPLANATION
+      </h2>
+
+      {/* Fintech toggle — front and center */}
+      <div
+        onClick={() => setFintech(f => !f)}
+        style={{
+          display: "flex", alignItems: "center", gap: "16px",
+          marginTop: "20px", cursor: "pointer", userSelect: "none",
+        }}
+      >
+        <div style={{
+          fontSize: "14px", fontWeight: 700, letterSpacing: "0.1em",
+          color: !fintech ? "var(--primary)" : "var(--muted)",
+          transition: "color 0.2s",
+        }}>
+          SIMPLE
+        </div>
+        <div style={{
+          width: "72px", height: "36px", borderRadius: "18px",
+          background: fintech ? "var(--primary)" : "var(--border)",
+          position: "relative", transition: "background 0.2s",
+          border: "1px solid",
+          borderColor: fintech ? "var(--primary)" : "var(--muted)",
+          flexShrink: 0,
+        }}>
+          <motion.div
+            animate={{ x: fintech ? 38 : 3 }}
+            transition={{ type: "spring", stiffness: 500, damping: 30 }}
+            style={{
+              width: "30px", height: "30px", borderRadius: "50%",
+              background: "#fff", position: "absolute", top: "2px",
+            }}
+          />
+        </div>
+        <div style={{
+          fontSize: "14px", fontWeight: 700, letterSpacing: "0.1em",
+          color: fintech ? "var(--primary)" : "var(--muted)",
+          transition: "color 0.2s",
+        }}>
+          FINTECH
+        </div>
+        <span style={{
+          fontSize: "11px", color: "var(--muted)", marginLeft: "8px",
+          fontStyle: "italic",
+        }}>
+          {fintech ? "Using industry terminology" : "Simplified for everyone"}
+        </span>
+      </div>
+
+      <p className="body-text" style={{ fontSize: "0.55em", marginTop: "16px", maxWidth: "800px" }}>
+        {fintech
+          ? <>Prediction markets are financial instruments where contracts pay $1 if an event occurs. Price = implied probability. Trade YES or NO like binary options.</>
+          : <>People buy and sell shares on whether something will happen. If you're right, you get $1. The price tells you how likely people think it is.</>
+        }
+      </p>
+
+      <div style={{
+        display: "flex", gap: "24px", marginTop: "28px",
+      }}>
+        {PM_EXAMPLES.map((ex, i) => (
+          <motion.div
+            key={ex.question}
+            initial={{ opacity: 0, y: 20 }}
+            animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 20 }}
+            transition={{ delay: 0.2 + i * 0.15 }}
+            style={{
+              flex: 1, background: "var(--card)", border: "1px solid var(--border)",
+              padding: "20px",
+            }}
+          >
+            <div style={{
+              fontSize: "9px", color: "var(--primary)", letterSpacing: "0.12em",
+              textTransform: "uppercase", marginBottom: "6px",
+            }}>
+              {ex.tag}
+            </div>
+            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--fg)", lineHeight: 1.4 }}>
+              {ex.question}
+            </div>
+            <div style={{ display: "flex", gap: "12px", marginTop: "12px" }}>
+              <div style={{
+                flex: 1, padding: "8px", textAlign: "center",
+                border: "1px solid var(--yes)", background: "rgba(0,200,83,0.06)",
+              }}>
+                <div style={{ fontSize: "22px", fontWeight: 700, color: "var(--yes)" }}>{ex.yes}</div>
+                <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "2px" }}>
+                  {fintech ? "YES contract" : "YES, it happens"}
+                </div>
+              </div>
+              <div style={{
+                flex: 1, padding: "8px", textAlign: "center",
+                border: "1px solid var(--no)", background: "rgba(255,82,82,0.06)",
+              }}>
+                <div style={{ fontSize: "22px", fontWeight: 700, color: "var(--no)" }}>{ex.no}</div>
+                <div style={{ fontSize: "10px", color: "var(--muted)", marginTop: "2px" }}>
+                  {fintech ? "NO contract" : "NO, it doesn't"}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        ))}
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={active ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ delay: 0.8 }}
+        style={{
+          display: "flex", gap: "28px", marginTop: "28px",
+          justifyContent: "center",
+        }}
+      >
+        <div style={{
+          padding: "10px 20px", border: "1px solid var(--border)",
+          background: "var(--card)", textAlign: "center",
+        }}>
+          <div style={{ fontSize: "10px", color: "var(--muted)", letterSpacing: "0.1em" }}>
+            {fintech ? "SETTLEMENT" : "PAYOUT"}
+          </div>
+          <div style={{ fontSize: "15px", color: "var(--fg)", marginTop: "4px" }}>
+            {fintech ? "Binary: pays $1 or $0 at expiry" : "Right = $1, Wrong = $0"}
+          </div>
+        </div>
+        <div style={{
+          padding: "10px 20px", border: "1px solid var(--border)",
+          background: "var(--card)", textAlign: "center",
+        }}>
+          <div style={{ fontSize: "10px", color: "var(--muted)", letterSpacing: "0.1em" }}>
+            {fintech ? "PRICE = PROBABILITY" : "THE PRICE"}
+          </div>
+          <div style={{ fontSize: "15px", color: "var(--fg)", marginTop: "4px" }}>
+            {fintech ? "82¢ = 82% implied probability" : "82¢ means people think 82% chance"}
+          </div>
+        </div>
+        <div style={{
+          padding: "10px 20px", border: "1px solid var(--primary)",
+          background: "var(--card)", textAlign: "center",
+        }}>
+          <div style={{ fontSize: "10px", color: "var(--primary)", letterSpacing: "0.1em" }}>
+            {fintech ? "THE EDGE" : "THE OPPORTUNITY"}
+          </div>
+          <div style={{ fontSize: "15px", color: "var(--fg)", marginTop: "4px" }}>
+            {fintech ? "Mispricing after news = alpha" : "News moves prices, be fastest"}
+          </div>
+        </div>
+      </motion.div>
+    </section>
+  )
+}
+
 // ── Problem slide (animated) ──
 
 function ProblemSlide() {
+  const fin = useFin()
   const [active, setActive] = useState(false)
   const ref = useRef(null)
 
@@ -166,20 +355,21 @@ function ProblemSlide() {
     <section ref={ref}>
       <div className="term-bar">
         <span className="title">PROBLEM</span>
-        <span className="meta">LATENCY GAP</span>
+        <span className="meta">{fin ? "LATENCY GAP" : "SPEED PROBLEM"}</span>
       </div>
-      <div style={{ display: "flex", gap: "30px" }}>
-        <div style={{ width: "420px", flexShrink: 0 }}>
+      <div style={{ display: "flex", gap: "48px" }}>
+        <div style={{ width: "440px", flexShrink: 0 }}>
           <span className="section-label">The Problem</span>
-          <h2>MARKETS MISPRICE<br />FOR MINUTES</h2>
-          <p className="body-text" style={{ marginTop: "8px", fontSize: "0.55em" }}>
-            Breaking news hits — prediction markets swing{" "}
-            <span className="no">violently</span>. Humans can't
-            read, evaluate, and execute <span className="hl">fast enough</span>.
+          <h2>{fin ? <>MARKETS MISPRICE<br />FOR MINUTES</> : <>PRICES ARE WRONG<br />FOR MINUTES</>}</h2>
+          <p className="body-text" style={{ marginTop: "16px", fontSize: "0.55em" }}>
+            {fin
+              ? <>Breaking news hits. Prediction markets swing <span className="no">violently</span>. Humans can't read, evaluate, and execute <span className="hl">fast enough</span>.</>
+              : <>Big news breaks. Prices on prediction markets go <span className="no">haywire</span>. People can't react <span className="hl">fast enough</span> to buy or sell.</>
+            }
           </p>
           <NewsTicker active={active} />
           {/* Delay bar */}
-          <div style={{ marginTop: "16px" }}>
+          <div style={{ marginTop: "24px" }}>
             <div style={{
               height: "6px", background: "var(--card)",
               border: "1px solid var(--border)", position: "relative",
@@ -197,21 +387,18 @@ function ProblemSlide() {
             </div>
             <div style={{
               display: "flex", justifyContent: "space-between",
-              fontSize: "8px", marginTop: "3px", color: "var(--muted)",
+              fontSize: "11px", marginTop: "4px", color: "var(--muted)",
             }}>
-              <span><span className="yes">0s</span> — bot trades</span>
-              <span><span className="primary">30s</span> — human reads</span>
-              <span><span className="no">2–5 min</span> — manual trade</span>
+              <span><span className="yes">0s</span> bot</span>
+              <span><span className="primary">30s</span> human reads</span>
+              <span><span className="no">2-5 min</span> manual trade</span>
             </div>
           </div>
-          <p style={{ fontSize: "8px", color: "var(--muted)", marginTop: "12px" }}>
-            Alpha decays exponentially. By the time a human acts, the edge is gone.
-          </p>
         </div>
 
         {/* Charts */}
-        <div style={{ flex: 1 }}>
-          <ChartPanel title="Iran Strike — YES" value="82¢ → 41¢" valueColor="var(--yes)">
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "10px" }}>
+          <ChartPanel title="Iran Strike: YES" value="82¢ → 41¢" valueColor="var(--yes)">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={YES_DATA} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>
                 <CartesianGrid stroke="#1e1e1e" strokeDasharray="3 3" />
@@ -235,7 +422,7 @@ function ProblemSlide() {
             </ResponsiveContainer>
           </ChartPanel>
 
-          <ChartPanel title="Iran Strike — NO" value="18¢ → 59¢" valueColor="var(--no)">
+          <ChartPanel title="Iran Strike: NO" value="18¢ → 59¢" valueColor="var(--no)">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={NO_DATA} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>
                 <CartesianGrid stroke="#1e1e1e" strokeDasharray="3 3" />
@@ -259,7 +446,7 @@ function ProblemSlide() {
             </ResponsiveContainer>
           </ChartPanel>
 
-          <ChartPanel title="Alpha Decay" value="EDGE → 0" valueColor="var(--primary)">
+          <ChartPanel title={fin ? "Alpha Decay" : "Profit Window Closing"} value={fin ? "EDGE → 0" : "OPPORTUNITY → 0"} valueColor="var(--primary)">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={ALPHA_DATA} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>
                 <CartesianGrid stroke="#1e1e1e" strokeDasharray="3 3" />
@@ -282,11 +469,689 @@ function ProblemSlide() {
   )
 }
 
+// ── Fan-out bar viz for Modal ──
+
+const MODAL_MARKETS = [
+  { name: "Iran Strike", ms: 112 },
+  { name: "Khamenei", ms: 68 },
+  { name: "Brent $130", ms: 187 },
+  { name: "Fed Cut", ms: 95 },
+  { name: "BTC $150k", ms: 143 },
+  { name: "VIX > 40", ms: 210 },
+  { name: "Hormuz", ms: 160 },
+]
+
+function ModalViz({ active }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginTop: "8px" }}>
+      {MODAL_MARKETS.map((m, i) => (
+        <div key={m.name} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "9px", color: "var(--muted)", width: "72px", textAlign: "right", flexShrink: 0 }}>
+            {m.name}
+          </span>
+          <div style={{ flex: 1, height: "12px", background: "var(--border)", position: "relative", overflow: "hidden" }}>
+            <motion.div
+              initial={{ width: 0 }}
+              animate={active ? { width: `${(m.ms / 250) * 100}%` } : { width: 0 }}
+              transition={{ duration: 1.8, delay: 0.12 * i, ease: [0.25, 0.46, 0.45, 0.94] }}
+              style={{ height: "100%", background: "var(--primary)", opacity: 0.8 }}
+            />
+          </div>
+          <motion.span
+            initial={{ opacity: 0 }}
+            animate={active ? { opacity: 1 } : { opacity: 0 }}
+            transition={{ delay: 1.4 + 0.12 * i }}
+            style={{ fontSize: "9px", color: "var(--primary)", width: "38px", fontVariantNumeric: "tabular-nums" }}
+          >
+            {m.ms}ms
+          </motion.span>
+        </div>
+      ))}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={active ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ delay: 2.5 }}
+        style={{ fontSize: "9px", color: "var(--yes)", textAlign: "right", marginTop: "3px" }}
+      >
+        ALL PARALLEL · FASTEST 68ms
+      </motion.div>
+    </div>
+  )
+}
+
+// ── Jupiter swap route viz ──
+
+function JupiterViz({ active }) {
+  return (
+    <div style={{ marginTop: "8px" }}>
+      {/* Swap conversion */}
+      <div style={{ display: "flex", alignItems: "center", gap: "0" }}>
+        <motion.div
+          initial={{ opacity: 0, x: -10 }}
+          animate={active ? { opacity: 1, x: 0 } : { opacity: 0, x: -10 }}
+          transition={{ delay: 0.2 }}
+          style={{
+            padding: "6px 10px", border: "1px solid var(--border)",
+            background: "var(--card)", textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--fg)" }}>$0.82</div>
+          <div style={{ fontSize: "8px", color: "var(--muted)", letterSpacing: "0.08em" }}>USDC</div>
+        </motion.div>
+        <motion.span
+          initial={{ opacity: 0 }}
+          animate={active ? { opacity: 0.5 } : { opacity: 0 }}
+          transition={{ delay: 0.5 }}
+          style={{ color: "var(--muted)", fontSize: "12px", margin: "0 4px" }}
+        >→</motion.span>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={active ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.8 }}
+          transition={{ delay: 0.7, type: "spring", stiffness: 200 }}
+          style={{
+            padding: "4px 8px", border: "1px solid #b388ff33",
+            background: "rgba(179,136,255,0.06)", textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: "8px", color: "#b388ff", letterSpacing: "0.08em" }}>RAYDIUM</div>
+          <div style={{ fontSize: "7px", color: "var(--muted)" }}>SOL-USDC pool</div>
+        </motion.div>
+        <motion.span
+          initial={{ opacity: 0 }}
+          animate={active ? { opacity: 0.5 } : { opacity: 0 }}
+          transition={{ delay: 1.0 }}
+          style={{ color: "var(--muted)", fontSize: "12px", margin: "0 4px" }}
+        >→</motion.span>
+        <motion.div
+          initial={{ opacity: 0, x: 10 }}
+          animate={active ? { opacity: 1, x: 0 } : { opacity: 0, x: 10 }}
+          transition={{ delay: 1.2 }}
+          style={{
+            padding: "6px 10px", border: "1px solid rgba(0,200,83,0.3)",
+            background: "rgba(0,200,83,0.06)", textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--yes)" }}>0.0093</div>
+          <div style={{ fontSize: "8px", color: "var(--muted)", letterSpacing: "0.08em" }}>SOL</div>
+        </motion.div>
+      </div>
+      {/* Stats row */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={active ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ delay: 1.6 }}
+        style={{
+          display: "flex", gap: "12px", marginTop: "6px",
+          fontSize: "8px", color: "var(--muted)",
+        }}
+      >
+        <span>Impact: <span style={{ color: "var(--yes)" }}>0.01%</span></span>
+        <span>Route: <span style={{ color: "#b388ff" }}>Raydium v4</span></span>
+        <span>Latency: <span style={{ color: "var(--primary)" }}>85ms</span></span>
+      </motion.div>
+    </div>
+  )
+}
+
+// ── Groq latency comparison viz ──
+
+const INFERENCE_BARS = [
+  { label: "GPT-4o", ms: 2200, color: "var(--no)" },
+  { label: "Claude", ms: 1800, color: "var(--no)" },
+  { label: "Llama 70B", ms: 650, color: "var(--primary)" },
+  { label: "Groq 8B 32tok", ms: 250, color: "var(--yes)" },
+]
+
+function GroqViz({ active }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "5px", marginTop: "8px" }}>
+      {INFERENCE_BARS.map((bar, i) => (
+        <div key={bar.label} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "9px", color: "var(--muted)", width: "86px", textAlign: "right", flexShrink: 0 }}>
+            {bar.label}
+          </span>
+          <div style={{ flex: 1, height: "14px", background: "var(--border)", position: "relative", overflow: "hidden" }}>
+            <motion.div
+              initial={{ width: 0 }}
+              animate={active ? { width: `${(bar.ms / 2400) * 100}%` } : { width: 0 }}
+              transition={{ duration: 1.6, delay: 0.25 * i, ease: [0.25, 0.46, 0.45, 0.94] }}
+              style={{ height: "100%", background: bar.color, opacity: 0.7 }}
+            />
+          </div>
+          <motion.span
+            initial={{ opacity: 0 }}
+            animate={active ? { opacity: 1 } : { opacity: 0 }}
+            transition={{ delay: 1.2 + 0.25 * i }}
+            style={{ fontSize: "9px", color: bar.color, width: "42px", fontVariantNumeric: "tabular-nums" }}
+          >
+            {bar.ms}ms
+          </motion.span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Pub/Sub tag routing viz ──
+
+const TAGS = ["#politics", "#crypto", "#financials", "#economics"]
+const TAG_COLORS = { "#politics": "var(--no)", "#crypto": "#b388ff", "#financials": "var(--primary)", "#economics": "var(--yes)" }
+const ROUTING_EXAMPLE = [
+  { headline: "IDF strikes Iran targets", tags: ["#politics", "#financials"] },
+  { headline: "Bitcoin spikes 7% on safe-haven", tags: ["#crypto", "#financials"] },
+]
+
+function PubSubViz({ active }) {
+  const [activeHeadline, setActiveHeadline] = useState(0)
+
+  useEffect(() => {
+    if (!active) return
+    const iv = setInterval(() => setActiveHeadline(i => (i + 1) % ROUTING_EXAMPLE.length), 3000)
+    return () => clearInterval(iv)
+  }, [active])
+
+  const current = ROUTING_EXAMPLE[activeHeadline]
+
+  return (
+    <div style={{ marginTop: "6px" }}>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={activeHeadline}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.25 }}
+          style={{
+            fontSize: "10px", color: "var(--fg)", padding: "4px 8px",
+            background: "var(--card)", border: "1px solid var(--border)",
+            marginBottom: "6px",
+          }}
+        >
+          "{current.headline}"
+        </motion.div>
+      </AnimatePresence>
+      <div style={{ display: "flex", gap: "5px" }}>
+        {TAGS.map(tag => {
+          const hit = current.tags.includes(tag)
+          return (
+            <motion.div
+              key={tag}
+              animate={{
+                borderColor: hit ? TAG_COLORS[tag] : "var(--border)",
+                opacity: hit ? 1 : 0.3,
+              }}
+              transition={{ duration: 0.4 }}
+              style={{
+                flex: 1, padding: "4px 0", textAlign: "center",
+                fontSize: "9px", fontWeight: 700, color: TAG_COLORS[tag],
+                border: "1px solid", background: "var(--card)",
+                letterSpacing: "0.05em",
+              }}
+            >
+              {tag}
+              {hit && (
+                <motion.div
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  style={{ fontSize: "7px", color: "var(--yes)", marginTop: "2px" }}
+                >
+                  ● ROUTED
+                </motion.div>
+              )}
+            </motion.div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ── Solution slide ──
+
+function SolutionSlide() {
+  const fin = useFin()
+  const [active, setActive] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => setActive(e.isIntersecting),
+      { threshold: 0.5 },
+    )
+    if (ref.current) obs.observe(ref.current)
+    return () => obs.disconnect()
+  }, [])
+
+  return (
+    <section ref={ref}>
+      <div className="term-bar">
+        <span className="title">SOLUTION</span>
+        <span className="meta">AUTONOMOUS PIPELINE</span>
+      </div>
+      <span className="section-label">Our Approach</span>
+      <h2>NEWS TO TRADE IN <span className="primary">&lt;1 SECOND</span></h2>
+      <div className="features" style={{ marginTop: "24px" }}>
+        <div className="panel">
+          <div className="panel-title">{fin ? "Modal Serverless Fan-Out" : "Modal Parallel Processing"}</div>
+          <div className="panel-body">
+            {fin
+              ? "Every headline triggers parallel evals across all markets. Auto-scaling containers."
+              : "Every headline checks all markets at once. Servers spin up automatically."
+            }
+          </div>
+          <ModalViz active={active} />
+        </div>
+        <div className="panel">
+          <div className="panel-title">{fin ? "Jupiter Ultra Routing" : "Jupiter Smart Trading"}</div>
+          <div className="panel-body">
+            {fin
+              ? "Trades find optimal swap path across Solana DEX liquidity pools"
+              : "Trades find the cheapest path to buy/sell across Solana exchanges"
+            }
+          </div>
+          <JupiterViz active={active} />
+        </div>
+        <div className="panel">
+          <div className="panel-title">{fin ? "Groq 32-Token Inference" : "Groq Instant AI Decisions"}</div>
+          <div className="panel-body">
+            {fin
+              ? "32 JSON tokens. Just action + probability vs traditional LLMs."
+              : "AI returns just YES/NO + confidence. Ultra-fast vs typical AI."
+            }
+          </div>
+          <GroqViz active={active} />
+        </div>
+        <div className="panel">
+          <div className="panel-title">{fin ? "Tag-Based Pub/Sub" : "Smart News Routing"}</div>
+          <div className="panel-body">
+            {fin
+              ? "Redis routes headlines by topic. Agents only see relevant markets."
+              : "Headlines are sorted by topic. Each AI only sees news it cares about."
+            }
+          </div>
+          <PubSubViz active={active} />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// ── Architecture flow ──
+
+function getFlowNodes(fin) {
+  return [
+    {
+      id: "news", label: "DBNews WS", sub: fin ? "Reuters · AP · Bloomberg" : "Live news feed",
+      color: "var(--primary)", tech: "wss://dbws.io · ~2 stories/sec",
+      detail: fin
+        ? "Persistent WebSocket with exponential backoff reconnect. Normalizes raw JSON → RawNewsItem. Drops non-English."
+        : "Always-on connection to a news wire. Receives headlines instantly and filters to English only.",
+    },
+    {
+      id: "tagger", label: "Tagger", sub: fin ? "VADER + regex" : "Categorizer",
+      color: "var(--primary)", tech: "~5ms · keyword extraction",
+      detail: fin
+        ? "Classifies categories (politics, crypto, financials), extracts tickers, determines urgency. Outputs TaggedNewsItem."
+        : "Labels each headline by topic (politics, crypto, finance) and how urgent it is. Takes ~5 milliseconds.",
+    },
+    {
+      id: "redis", label: fin ? "Redis Pub/Sub" : "News Router", sub: fin ? "Tag channels" : "Topic sorting",
+      color: "var(--no)", tech: "<1ms · fire-and-forget",
+      detail: fin
+        ? "Publishes to news:all + news:category:{tag}. Markets subscribe only to matching tags. Drops ~80% of irrelevant pairs."
+        : "Sends each headline only to markets that care about that topic. Skips ~80% of irrelevant combinations.",
+    },
+    {
+      id: "modal", label: "Modal Fan-Out", sub: fin ? "Serverless containers" : "Cloud workers",
+      color: "#b388ff", tech: "20× concurrency · asyncio.gather()",
+      detail: fin
+        ? "MarketAgent on Modal. buffer_containers=1 stays warm. All matching markets evaluated in parallel via asyncio.gather()."
+        : "Spins up cloud workers to check all relevant markets at the same time. 20 markets checked in parallel.",
+    },
+    {
+      id: "groq", label: "Groq LLM", sub: "Llama 3.1 8B",
+      color: "var(--yes)", tech: "32 tokens · JSON mode · 68ms fastest",
+      detail: fin
+        ? "Returns {action: YES|NO, p: 1-99}. Temp 0.1, timeout 2s. |theo − current| < 6% → SKIP. Confidence = delta × 2."
+        : "AI reads the headline and says YES/NO + how confident. Only acts if the price is wrong enough. Fastest: 68ms.",
+    },
+    {
+      id: "decision", label: "Decision", sub: "YES / NO / SKIP",
+      color: "var(--primary)", tech: fin ? "theo price + confidence score" : "fair price + confidence",
+      detail: fin
+        ? "Decision(action, confidence, theo, market_address, latency_ms). Broadcast via WebSocket to all connected clients."
+        : "The AI's final call: buy YES, buy NO, or skip. Sent instantly to the dashboard so you see it live.",
+    },
+    {
+      id: "jupiter", label: "Jupiter Ultra", sub: fin ? "Solana DEX routing" : "Trade executor",
+      color: "#b388ff", tech: "USDC → SOL · ~85ms quote",
+      detail: fin
+        ? "Routes through Raydium, Orca pools. Returns outAmount, priceImpact, routePlan for optimal execution path."
+        : "Finds the cheapest way to swap dollars for tokens across multiple exchanges. Gets a price quote in ~85ms.",
+    },
+    {
+      id: "solana", label: "Solana TX", sub: fin ? "On-chain confirm" : "Blockchain confirm",
+      color: "var(--yes)", tech: "~400ms slot · mainnet",
+      detail: fin
+        ? "Signed transaction submitted for swap. Confirms in one slot. Portfolio mark-to-market updates from agent theo."
+        : "The trade is sent to the Solana blockchain and confirmed in ~400ms. Your portfolio updates immediately.",
+    },
+  ]
+}
+
+
+function FlowNode({ node, selected, onClick, active, delay, size = "normal" }) {
+  const isSelected = selected === node.id
+  const big = size === "big"
+  return (
+    <motion.div
+      onClick={() => onClick(isSelected ? null : node.id)}
+      initial={{ opacity: 0, y: 15 }}
+      animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 15 }}
+      transition={{ delay, type: "spring", stiffness: 200, damping: 20 }}
+      whileHover={{ borderColor: node.color, transition: { duration: 0.15 } }}
+      whileTap={{ scale: 0.97 }}
+      style={{
+        background: isSelected ? "var(--border)" : "var(--card)",
+        border: `1px solid ${isSelected ? node.color : "var(--border)"}`,
+        padding: big ? "10px 8px" : "10px 8px",
+        cursor: "pointer",
+        textAlign: "center",
+        width: big ? "130px" : "auto",
+        height: big ? "90px" : "auto",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "center",
+        flexShrink: 0,
+      }}
+    >
+      <div style={{
+        fontSize: big ? "14px" : "10px", fontWeight: 700, color: node.color,
+        letterSpacing: "0.06em",
+      }}>
+        {node.label}
+      </div>
+      <div style={{
+        fontSize: big ? "10px" : "7px", color: "var(--muted)",
+        marginTop: "4px", lineHeight: 1.3,
+      }}>
+        {node.sub}
+      </div>
+    </motion.div>
+  )
+}
+
+function FlowArrow({ active, delay }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, scaleX: 0 }}
+      animate={active ? { opacity: 1, scaleX: 1 } : { opacity: 0, scaleX: 0 }}
+      transition={{ delay, duration: 0.3 }}
+      style={{
+        display: "flex", alignItems: "center", flexShrink: 0,
+        transformOrigin: "left",
+      }}
+    >
+      <div style={{
+        width: "20px", height: "1px", background: "var(--border)",
+      }} />
+      <div style={{
+        width: 0, height: 0,
+        borderTop: "3px solid transparent",
+        borderBottom: "3px solid transparent",
+        borderLeft: "5px solid var(--border)",
+      }} />
+    </motion.div>
+  )
+}
+
+function ArchitectureSlide() {
+  const fin = useFin()
+  const [selected, setSelected] = useState(null)
+  const [active, setActive] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => setActive(e.isIntersecting),
+      { threshold: 0.5 },
+    )
+    if (ref.current) obs.observe(ref.current)
+    return () => obs.disconnect()
+  }, [])
+
+  const flowNodes = getFlowNodes(fin)
+  const allNodes = flowNodes
+  const selectedNode = allNodes.find(n => n.id === selected)
+
+  return (
+    <section ref={ref}>
+      <div className="term-bar">
+        <span className="title">ARCHITECTURE</span>
+        <span className="meta">CLICK ANY NODE</span>
+      </div>
+      <span className="section-label">System Design</span>
+      <h2 style={{ fontSize: "1.2em" }}>{fin ? "NEWS → TAG → ROUTE → EVAL → DECIDE → TRADE" : "How it works under the hood"}</h2>
+
+      {/* Main horizontal flow */}
+      <div style={{
+        display: "flex", alignItems: "center",
+        marginTop: "32px", gap: "0",
+      }}>
+        {flowNodes.map((node, i) => (
+          <div key={node.id} style={{ display: "flex", alignItems: "center" }}>
+            <FlowNode
+              node={node} selected={selected} onClick={setSelected}
+              active={active} delay={0.1 * i} size="big"
+            />
+            {i < flowNodes.length - 1 && (
+              <FlowArrow active={active} delay={0.1 * i + 0.05} />
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Detail panel */}
+      <div style={{ marginTop: "40px", minHeight: "90px" }}>
+        <AnimatePresence mode="wait">
+          {selectedNode ? (
+            <motion.div
+              key={selectedNode.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+              style={{
+                background: "var(--card)", border: `1px solid ${selectedNode.color}`,
+                padding: "16px 20px", display: "flex", gap: "30px",
+                width: "100%", boxSizing: "border-box",
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <div style={{
+                  fontSize: "16px", fontWeight: 700, color: selectedNode.color,
+                  letterSpacing: "0.06em",
+                }}>
+                  {selectedNode.label}
+                  <span style={{ fontSize: "11px", color: "var(--muted)", marginLeft: "8px", fontWeight: 400 }}>
+                    {selectedNode.sub}
+                  </span>
+                </div>
+                <div style={{
+                  fontSize: "13px", color: "var(--fg)", marginTop: "8px", lineHeight: 1.6,
+                }}>
+                  {selectedNode.detail}
+                </div>
+              </div>
+              <div style={{
+                width: "200px", flexShrink: 0, borderLeft: "1px solid var(--border)",
+                paddingLeft: "16px", display: "flex", flexDirection: "column", justifyContent: "center",
+              }}>
+                <div style={{ fontSize: "10px", color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+                  TECH
+                </div>
+                <div style={{ fontSize: "13px", color: "#b388ff", marginTop: "4px", lineHeight: 1.5 }}>
+                  {selectedNode.tech}
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.6 }}
+              style={{
+                fontSize: "10px", color: "var(--muted)", textAlign: "center",
+                padding: "20px 0",
+              }}
+            >
+              CLICK ANY NODE TO INSPECT · 10 COMPONENTS · NEWS → TRADE IN &lt;1s
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </section>
+  )
+}
+
+// ── Closing slide ──
+
+const CLOSING_STATS = [
+  { val: "<1s", label: "News → Trade" },
+  { val: "68ms", label: "Fastest Decision" },
+  { val: "20×", label: "Parallel Evals" },
+  { val: "32", label: "LLM Tokens" },
+]
+
+function ClosingSlide() {
+  const [active, setActive] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => setActive(e.isIntersecting),
+      { threshold: 0.5 },
+    )
+    if (ref.current) obs.observe(ref.current)
+    return () => obs.disconnect()
+  }, [])
+
+  return (
+    <section ref={ref}>
+      <div className="term-bar">
+        <span className="title">EOF</span>
+        <span className="meta">SESSION COMPLETE</span>
+      </div>
+
+      <div style={{
+        display: "flex", flexDirection: "column", alignItems: "center",
+        justifyContent: "center", height: "85%", gap: "20px",
+      }}>
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={active ? { opacity: 1, scale: 1 } : {}}
+          transition={{ duration: 0.5, type: "spring", stiffness: 120 }}
+          style={{ textAlign: "center" }}
+        >
+          <div style={{
+            fontSize: "56px", fontWeight: 800, letterSpacing: "-0.02em",
+            lineHeight: 1,
+          }}>
+            TRADE<span className="primary">MAXXER</span>
+          </div>
+          <div style={{
+            fontSize: "14px", color: "var(--muted)", marginTop: "12px",
+            letterSpacing: "0.2em", textTransform: "uppercase",
+          }}>
+            Autonomous Prediction Market Trading
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={active ? { opacity: 1, y: 0 } : {}}
+          transition={{ delay: 0.3, duration: 0.4 }}
+          style={{
+            display: "flex", gap: "32px", marginTop: "8px",
+          }}
+        >
+          {CLOSING_STATS.map((s, i) => (
+            <motion.div
+              key={s.label}
+              initial={{ opacity: 0, y: 15 }}
+              animate={active ? { opacity: 1, y: 0 } : {}}
+              transition={{ delay: 0.5 + i * 0.1 }}
+              style={{
+                textAlign: "center",
+                padding: "12px 20px",
+                background: "var(--card)",
+                border: "1px solid var(--border)",
+                minWidth: "100px",
+              }}
+            >
+              <div style={{
+                fontSize: "28px", fontWeight: 700, color: "var(--primary)",
+                fontFamily: "var(--font-mono)",
+              }}>
+                {s.val}
+              </div>
+              <div style={{
+                fontSize: "10px", color: "var(--muted)", marginTop: "4px",
+                letterSpacing: "0.1em", textTransform: "uppercase",
+              }}>
+                {s.label}
+              </div>
+            </motion.div>
+          ))}
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={active ? { opacity: 1 } : {}}
+          transition={{ delay: 1.0, duration: 0.6 }}
+          style={{
+            marginTop: "24px",
+            padding: "16px 48px",
+            border: "2px solid var(--primary)",
+            textAlign: "center",
+          }}
+        >
+          <div style={{
+            fontSize: "28px", fontWeight: 700, color: "var(--primary)",
+            letterSpacing: "0.15em",
+          }}>
+            QUESTIONS?
+          </div>
+          <div style={{
+            fontSize: "12px", color: "var(--muted)", marginTop: "6px",
+            letterSpacing: "0.08em",
+          }}>
+            Anirudh &middot; Arslan &middot; Mathew
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={active ? { opacity: 0.3 } : {}}
+          transition={{ delay: 1.4, duration: 0.5 }}
+          style={{
+            fontSize: "10px", color: "var(--muted)", letterSpacing: "0.15em",
+            marginTop: "16px", fontFamily: "var(--font-mono)",
+          }}
+        >
+          MODAL &middot; GROQ &middot; SOLANA &middot; JUPITER &middot; REDIS
+        </motion.div>
+      </div>
+    </section>
+  )
+}
+
 // ── Main App ──
 
 export default function App() {
   const deckRef = useRef(null)
   const deckInstance = useRef(null)
+  const [fintech, setFintech] = useState(true)
 
   useEffect(() => {
     if (deckInstance.current) return
@@ -315,59 +1180,40 @@ export default function App() {
   }, [])
 
   return (
+    <FintechCtx.Provider value={fintech}>
     <div className="reveal" ref={deckRef}>
       <div className="slides">
 
         {/* ━━ SLIDE 1: TITLE ━━ */}
         <section>
           <div className="term-bar">
-            <span className="title">TRADEMAXXER</span>
-            <span className="meta">v1.0 &nbsp;│&nbsp; MODAL &middot; GROQ &middot; SOLANA</span>
+            <span className="title">The Future Of Prediction Markets</span>
           </div>
-          <div className="title-layout">
-            <div className="title-left">
-              <div className="team-card">
-                <div className="avatar-placeholder" />
-                <div className="team-info">
-                  <span className="team-name">Anirudh Kuppili</span>
-                  <span className="team-role">Eng. @ <span className="primary">Aparavi</span><br />Series A startup</span>
-                </div>
-              </div>
-              <div className="team-card">
-                <div className="avatar-placeholder" />
-                <div className="team-info">
-                  <span className="team-name">Arslan Kamchybekov</span>
-                  <span className="team-role">Founding Eng. @ <span className="primary">Kairos</span><br />Backed by Jump Trading &amp; a16z</span>
-                </div>
-              </div>
-              <div className="team-card">
-                <div className="avatar-placeholder" />
-                <div className="team-info">
-                  <span className="team-name">Mathew Randall</span>
-                  <span className="team-role">Prev @ <span className="primary">Optiver</span><br />Incoming @ <span className="primary">Etched.ai</span></span>
-                </div>
-              </div>
-            </div>
-            <div className="title-right">
-              <h1>
+          <div style={{
+            display: "flex", gap: "48px", marginTop: "20px",
+            alignItems: "center", height: "85%",
+          }}>
+            {/* Left — title & info */}
+            <div style={{ flex: 1 }}>
+              <h1 style={{ fontSize: "3.2em", lineHeight: 1 }}>
                 TRADE<span className="primary">MAXXER</span>
               </h1>
-              <p className="body-text" style={{ fontSize: "0.5em", marginTop: "12px" }}>
+              <p className="body-text" style={{ fontSize: "0.7em", marginTop: "14px" }}>
                 Autonomous news-to-trade pipeline for prediction markets
               </p>
-              <div style={{ marginTop: "24px", display: "flex", gap: "8px" }}>
+              <div style={{ marginTop: "24px", display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ fontSize: "11px", color: "var(--muted)", letterSpacing: "0.1em", textTransform: "uppercase" }}>Powered by</span>
                 <span className="badge badge-modal">Modal</span>
-                <span className="badge badge-groq">Groq</span>
                 <span className="badge badge-solana">Solana</span>
               </div>
-              <div className="stat-row" style={{ marginTop: "32px" }}>
+              <div className="stat-row" style={{ marginTop: "36px" }}>
                 <div className="stat">
                   <span className="val">&lt;1s</span>
                   <span className="unit">News to Trade</span>
                 </div>
                 <div className="stat">
-                  <span className="val">~250ms</span>
-                  <span className="unit">Agent Inference</span>
+                  <span className="val">68ms</span>
+                  <span className="unit">Fastest Decision</span>
                 </div>
                 <div className="stat">
                   <span className="val">20×</span>
@@ -375,166 +1221,88 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* Right — team photos */}
+            <div style={{
+              display: "flex", flexDirection: "column", gap: "14px",
+              width: "480px", flexShrink: 0,
+            }}>
+              {[
+                { img: "/assets/team/arslan.JPG", name: "Arslan Kamchybekov", role: <>Founding Eng. @ <span className="primary">Kairos</span><br />Backed by <span className="primary">Jump Trading</span> &amp; <span className="primary">a16z</span></> },
+                { img: "/assets/team/ani.JPG", name: "Anirudh Kuppili", role: <>Eng. @ <span className="primary">Aparavi</span><br /><span className="primary">Series A</span> startup</> },
+                { img: "/assets/team/matt.JPG", name: "Mathew Randall", role: <>Prev. @ <span className="primary">Optiver</span><br />Incoming @ <span className="primary">Etched.ai</span></> },
+              ].map((m) => (
+                <div key={m.name} style={{
+                  display: "flex", alignItems: "center", gap: "16px",
+                  background: "var(--card)", border: "1px solid var(--border)",
+                  padding: "14px 18px",
+                }}>
+                  <img
+                    src={m.img}
+                    alt={m.name}
+                    style={{
+                      width: "72px", height: "72px", objectFit: "cover",
+                      border: "2px solid var(--border)", flexShrink: 0,
+                    }}
+                  />
+                  <div>
+                    <div style={{
+                      fontSize: "18px", fontWeight: 700, color: "var(--fg)",
+                      letterSpacing: "0.02em",
+                    }}>
+                      {m.name}
+                    </div>
+                    <div style={{
+                      fontSize: "13px", color: "var(--muted)", lineHeight: 1.5,
+                      marginTop: "2px",
+                    }}>
+                      {m.role}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </section>
 
-        {/* ━━ SLIDE 2: PROBLEM ━━ */}
+        {/* ━━ SLIDE 2: PREDICTION MARKETS 101 ━━ */}
+        <PredictionMarketsSlide fintech={fintech} setFintech={setFintech} />
+
+        {/* ━━ SLIDE 3: PROBLEM ━━ */}
         <ProblemSlide />
 
         {/* ━━ SLIDE 3: SOLUTION ━━ */}
-        <section>
-          <div className="term-bar">
-            <span className="title">SOLUTION</span>
-            <span className="meta">AUTONOMOUS PIPELINE</span>
-          </div>
-          <span className="section-label">Our Approach</span>
-          <h2>NEWS TO TRADE IN <span className="primary">&lt;1 SECOND</span></h2>
-          <p className="body-text" style={{ marginTop: "10px", fontSize: "0.45em" }}>
-            TradeMaxxer autonomously ingests live news, reprices markets with an
-            LLM agent, and fires trades on Solana — before humans can react.
-          </p>
-          <div className="features">
-            <div className="panel">
-              <div className="panel-title">Modal Serverless Fan-Out</div>
-              <div className="panel-body">
-                Parallel agent evals across all markets as concurrent
-                Modal function calls that auto-scale
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel-title">Jupiter Ultra Routing</div>
-              <div className="panel-body">
-                Trades route through Jupiter Ultra API for optimal
-                swap paths across Solana DEX liquidity
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel-title">Groq 32-Token Inference</div>
-              <div className="panel-body">
-                Responses capped at 32 JSON tokens — action +
-                probability — for ~250ms inference
-              </div>
-            </div>
-            <div className="panel">
-              <div className="panel-title">Tag-Based Pub/Sub</div>
-              <div className="panel-body">
-                Redis routes headlines by topic tag so agents
-                only evaluate relevant markets
-              </div>
-            </div>
-          </div>
-        </section>
+        <SolutionSlide />
 
-        {/* ━━ SLIDE 4: DEMO ━━ */}
+        {/* ━━ SLIDE 5: DEMO ━━ */}
         <section>
           <div className="term-bar">
-            <span className="title">LIVE DEMO</span>
+            <span className="title">LIVE DEMO IN PROGRESS...</span>
             <span className="meta">DASHBOARD &middot; REAL-TIME</span>
           </div>
-          <span className="section-label">Demo</span>
-          <h2>REAL-TIME TRADING DASHBOARD</h2>
-          <p style={{ fontSize: "0.38em", color: "var(--muted)", marginTop: "6px" }}>
-            <span className="muted">NEWS</span> <span className="pipe">→</span>{" "}
-            <span className="muted">AGENT</span> <span className="pipe">→</span>{" "}
-            <span className="muted">DECISION</span> <span className="pipe">→</span>{" "}
-            <span className="primary">JUPITER SWAP</span> <span className="pipe">→</span>{" "}
-            <span className="yes">P&amp;L</span>
-          </p>
-          <img
-            src="/assets/demo-wallet.png"
-            alt="TradeMaxxer dashboard"
-            className="demo-img"
-          />
+          <div style={{
+            display: "flex", flexDirection: "column", alignItems: "center",
+            justifyContent: "center", height: "88%", gap: "16px",
+          }}>
+            <img
+              src="/assets/live_demo.png"
+              alt="TradeMaxxer live demo"
+              style={{
+                maxWidth: "85%", maxHeight: "70%", objectFit: "contain",
+                border: "1px solid var(--border)",
+              }}
+            />
+          </div>
         </section>
 
         {/* ━━ SLIDE 5: ARCHITECTURE ━━ */}
-        <section>
-          <div className="term-bar">
-            <span className="title">ARCHITECTURE</span>
-            <span className="meta">END-TO-END PIPELINE</span>
-          </div>
-          <span className="section-label">System Design</span>
-          <h2>INGESTION → ROUTING → AGENTS → EXECUTION</h2>
-          <img
-            src="/assets/architecture.png"
-            alt="TradeMaxxer architecture"
-            className="arch-img"
-          />
-        </section>
+        <ArchitectureSlide />
 
-        {/* ━━ SLIDE 6: PIPELINE TIMING ━━ */}
-        <section>
-          <div className="term-bar">
-            <span className="title">PIPELINE</span>
-            <span className="meta">TIMING &middot; 7 STAGES</span>
-          </div>
-          <span className="section-label">Execution Flow</span>
-          <h2>NEWS TO TRADE IN <span className="primary">7 STEPS</span></h2>
-          <div className="flow-grid flow-grid-7" style={{ marginTop: "24px" }}>
-            <div className="flow-step">
-              <span className="num">01</span>
-              <span className="label">Ingest</span>
-              <span className="desc">WS streams headline</span>
-              <span className="time">0ms</span>
-            </div>
-            <div className="flow-step">
-              <span className="num">02</span>
-              <span className="label">Tagged</span>
-              <span className="desc">VADER + regex</span>
-              <span className="time">5ms</span>
-            </div>
-            <div className="flow-step">
-              <span className="num">03</span>
-              <span className="label">Routed</span>
-              <span className="desc">Redis pub/sub</span>
-              <span className="time">6ms</span>
-            </div>
-            <div className="flow-step">
-              <span className="num">04</span>
-              <span className="label">Eval</span>
-              <span className="desc">Modal + Groq</span>
-              <span className="time">350ms</span>
-            </div>
-            <div className="flow-step">
-              <span className="num">05</span>
-              <span className="label">Filter</span>
-              <span className="desc">6% threshold</span>
-              <span className="time">350ms</span>
-            </div>
-            <div className="flow-step">
-              <span className="num">06</span>
-              <span className="label">Execute</span>
-              <span className="desc">Jupiter Ultra</span>
-              <span className="time">355ms</span>
-            </div>
-            <div className="flow-step">
-              <span className="num">07</span>
-              <span className="label">Confirm</span>
-              <span className="desc">On-chain, P&amp;L</span>
-              <span className="time">750ms</span>
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "24px", marginTop: "24px" }}>
-            <div className="panel" style={{ flex: 1 }}>
-              <div className="panel-title">Latency Budget</div>
-              <div className="kv"><span className="k">Tagger</span><span className="v">~5ms</span></div>
-              <div className="kv"><span className="k">Routing</span><span className="v">&lt;1ms</span></div>
-              <div className="kv"><span className="k">Groq Inference</span><span className="v primary">~250ms</span></div>
-              <div className="kv"><span className="k">Modal RPC</span><span className="v">~50ms</span></div>
-              <div className="kv"><span className="k">Executor</span><span className="v">~10ms</span></div>
-            </div>
-            <div className="panel" style={{ flex: 1 }}>
-              <div className="panel-title">Stack</div>
-              <div className="kv"><span className="k">LLM</span><span className="v">Llama 3.1 8B</span></div>
-              <div className="kv"><span className="k">Inference</span><span className="v yes">Groq</span></div>
-              <div className="kv"><span className="k">Compute</span><span className="v primary">Modal</span></div>
-              <div className="kv"><span className="k">Chain</span><span className="v" style={{ color: "#b388ff" }}>Solana</span></div>
-              <div className="kv"><span className="k">DEX</span><span className="v" style={{ color: "#b388ff" }}>Jupiter Ultra</span></div>
-            </div>
-          </div>
-        </section>
+        {/* ━━ SLIDE 7: QUESTIONS / END ━━ */}
+        <ClosingSlide />
 
       </div>
     </div>
+    </FintechCtx.Provider>
   )
 }
