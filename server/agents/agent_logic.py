@@ -15,8 +15,7 @@ from agents.schemas import Decision, MarketConfig, StoryPayload
 
 logger = logging.getLogger(__name__)
 
-SKIP_THRESHOLD = 0.03
-
+SKIP_THRESHOLD = 0.06
 
 async def evaluate(
     story: StoryPayload,
@@ -34,6 +33,7 @@ async def evaluate(
         body=story.body,
         question=market.question,
         current_probability=market.current_probability,
+        rules_primary=market.rules_primary,
     )
 
     t0 = time.monotonic()

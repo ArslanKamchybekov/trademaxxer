@@ -218,12 +218,15 @@ class KalshiMarketRegistry:
         # Extract tags from question
         tags = self._extract_tags_from_question(question)
 
+        rules_primary = (market.get("rules_primary") or "").strip()
+
         return MarketConfig(
-            address=ticker,  # Use ticker as address
+            address=ticker,
             question=question,
             current_probability=probability,
             tags=tags,
             expires_at=expires_at,
+            rules_primary=rules_primary,
         )
 
     def _extract_tags_from_question(self, question: str) -> tuple[str, ...]:
@@ -373,12 +376,15 @@ class KalshiMarketRegistry:
         combined_text = f"{event_title} {market_subtitle}".lower()
         tags = self._extract_tags_from_question(combined_text)
 
+        rules_primary = (market.get("rules_primary") or "").strip()
+
         return MarketConfig(
             address=ticker,
             question=question,
             current_probability=probability,
             tags=tags,
             expires_at=expires_at,
+            rules_primary=rules_primary,
         )
 
     def _get_market_volume_score(self, market: MarketConfig) -> float:

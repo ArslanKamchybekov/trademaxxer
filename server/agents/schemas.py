@@ -29,6 +29,7 @@ class MarketConfig:
     current_probability: float
     tags: tuple[str, ...]
     expires_at: datetime | None = None
+    rules_primary: str = ""
 
     def __post_init__(self) -> None:
         if not self.address:
@@ -61,6 +62,7 @@ class MarketConfig:
             current_probability=d["current_probability"],
             tags=tuple(d["tags"]),
             expires_at=expires,
+            rules_primary=d.get("rules_primary", ""),
         )
 
 

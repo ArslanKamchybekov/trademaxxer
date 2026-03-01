@@ -27,6 +27,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.82,
         tags=("politics",),
         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if the US military carries out at least one kinetic strike on Iranian territory or Iranian military assets before April 1, 2026.",
     ),
     MarketConfig(
         address="KXKHM-26MAR15-T55",
@@ -34,6 +35,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.55,
         tags=("politics",),
         expires_at=datetime(2026, 3, 15, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if the Iranian government or a credible international body officially confirms Khamenei's death before March 15, 2026.",
     ),
     MarketConfig(
         address="KXCL130-26APR01-T41",
@@ -41,6 +43,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.41,
         tags=("financials", "economics"),
         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if the ICE Brent Crude front-month futures contract trades at or above $130.00 at any point before April 1, 2026.",
     ),
     MarketConfig(
         address="KXFEDECUT-26APR01-T23",
@@ -48,6 +51,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.23,
         tags=("economics",),
         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if the FOMC announces a federal funds rate reduction outside of a scheduled meeting before April 1, 2026.",
     ),
     MarketConfig(
         address="KXBTC150-26APR01-T34",
@@ -55,6 +59,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.34,
         tags=("crypto", "financials"),
         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if the CoinDesk Bitcoin Price Index (XBX) prints at or above $150,000 at any point before April 1, 2026.",
     ),
     MarketConfig(
         address="KXVIX40-26APR01-T38",
@@ -62,6 +67,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.38,
         tags=("financials",),
         expires_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if the CBOE Volatility Index (VIX) has a daily closing value above 40.00 before April 1, 2026.",
     ),
     MarketConfig(
         address="KXHRMZ-26MAY01-T18",
@@ -69,6 +75,7 @@ DEMO_CONTRACTS: list[MarketConfig] = [
         current_probability=0.18,
         tags=("politics", "economics", "financials"),
         expires_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
+        rules_primary="Resolves Yes if Iran officially blocks or the US Navy confirms a blockade of commercial shipping through the Strait of Hormuz before May 1, 2026.",
     ),
 ]
 
