@@ -1956,9 +1956,9 @@ export default function App() {
               width: "480px", flexShrink: 0,
             }}>
               {[
-                { img: "/assets/team/arslan.JPG", name: "Arslan Kamchybekov", role: <>Founding Eng. @ <span className="primary">Kairos</span><br />Backed by <span className="primary">Jump Trading</span> &amp; <span className="primary">a16z</span></> },
+                { img: "/assets/team/arslan.JPG", name: "Arslan Kamchybekov", role: <>Founding Eng. @ <span className="primary">Kairos</span><br />Backed by <span className="primary">Geneva Trading</span> &amp; <span className="primary">a16z</span></> },
                 { img: "/assets/team/ani.JPG", name: "Anirudh Kuppili", role: <>Eng. @ <span className="primary">Aparavi</span><br /><span className="primary">Series A</span> startup</> },
-                { img: "/assets/team/matt.JPG", name: "Mathew Randall", role: <>Prev. @ <span className="primary">Optiver</span><br />Incoming @ <span className="primary">Etched.ai</span></> },
+                { img: "/assets/team/matt.JPG", name: "Mathew Randal", role: <>Eng. @ <span className="primary">Optiver</span><br />Quant @ Illinois</> },
               ].map((m) => (
                 <div key={m.name} style={{
                   display: "flex", alignItems: "center", gap: "16px",
