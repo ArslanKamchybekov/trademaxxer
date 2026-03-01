@@ -641,7 +641,7 @@ const ROUTING_EXAMPLE = [
   { headline: "Bitcoin spikes 7% on safe-haven", tags: ["#crypto", "#financials"] },
 ]
 
-function PubSubViz({ active }) {
+function IndexRouteViz({ active }) {
   const [activeHeadline, setActiveHeadline] = useState(0)
 
   useEffect(() => {
@@ -695,7 +695,7 @@ function PubSubViz({ active }) {
                   animate={{ scale: 1 }}
                   style={{ fontSize: "7px", color: "var(--yes)", marginTop: "2px" }}
                 >
-                  ● ROUTED
+                  ● MATCHED
                 </motion.div>
               )}
             </motion.div>
@@ -762,14 +762,14 @@ function SolutionSlide() {
           <GroqViz active={active} />
         </div>
         <div className="panel">
-          <div className="panel-title">{fin ? "Tag-Based Pub/Sub" : "Smart News Routing"}</div>
+          <div className="panel-title">{fin ? "In-Memory Pub/Sub" : "Smart News Routing"}</div>
           <div className="panel-body">
             {fin
-              ? "Redis routes headlines by topic. Agents only see relevant markets."
+              ? "Zero-copy in-process bus. Markets subscribe to tag channels. publish() dedupes and fires callbacks via asyncio.gather()."
               : "Headlines are sorted by topic. Each AI only sees news it cares about."
             }
           </div>
-          <PubSubViz active={active} />
+          <IndexRouteViz active={active} />
         </div>
       </div>
     </section>
@@ -795,11 +795,11 @@ function getFlowNodes(fin) {
         : "Labels each headline by topic (politics, crypto, finance) and how urgent it is. Takes ~5 milliseconds.",
     },
     {
-      id: "redis", label: fin ? "Redis Pub/Sub" : "News Router", sub: fin ? "Tag channels" : "Topic sorting",
-      color: "var(--no)", tech: "<1ms · fire-and-forget",
+      id: "pubsub", label: fin ? "In-Memory Pub/Sub" : "Topic Router", sub: fin ? "tag → callbacks O(1)" : "Smart routing",
+      color: "var(--primary)", tech: "0ms latency · zero-copy · async fan-out",
       detail: fin
-        ? "Publishes to news:all + news:category:{tag}. Markets subscribe only to matching tags. Drops ~80% of irrelevant pairs."
-        : "Sends each headline only to markets that care about that topic. Skips ~80% of irrelevant combinations.",
+        ? "In-process pub/sub bus. Markets subscribe to tag channels on enable, unsubscribe on disable. publish() dedupes and fires all matching callbacks via asyncio.gather()."
+        : "An instant message bus. Each market listens for its topics. When news arrives, only the right markets get notified. No network hop, no serialization.",
     },
     {
       id: "modal", label: "Modal Fan-Out", sub: fin ? "Serverless containers" : "Cloud workers",
@@ -932,14 +932,14 @@ function ArchitectureSlide({ onModalReveal, onSolanaReveal }) {
         <span className="meta">CLICK ANY NODE</span>
       </div>
       <span className="section-label">System Design</span>
-      <h2 style={{ fontSize: "1.2em" }}>{fin ? "NEWS → TAG → ROUTE → EVAL → DECIDE → TRADE" : "How it works under the hood"}</h2>
+      <h2 style={{ fontSize: "1.2em" }}>{fin ? "NEWS → TAG → PUB/SUB → EVAL → DECIDE → TRADE" : "How it works under the hood"}</h2>
 
       {/* Main flow with fan-out */}
       <div style={{
         display: "flex", alignItems: "center",
         marginTop: "32px", gap: "0",
       }}>
-        {/* Phase 1: DBNews → Tagger */}
+        {/* Phase 1: WorldMonitor → Tagger */}
         {flowNodes.slice(0, 2).map((node, i) => (
           <div key={node.id} style={{ display: "flex", alignItems: "center" }}>
             <FlowNode
@@ -950,49 +950,60 @@ function ArchitectureSlide({ onModalReveal, onSolanaReveal }) {
           </div>
         ))}
 
-        {/* Phase 2: Redis label + 3 channels → Modal container box */}
+        {/* Phase 2: Inverted Index lookup table → Modal Fan-Out */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={active ? { opacity: 1 } : { opacity: 0 }}
           transition={{ delay: 0.2 }}
           style={{ display: "flex", alignItems: "center", flexShrink: 0 }}
         >
-          {/* Redis label on top of 3 channel rows */}
-          <div
-            onClick={() => setSelected(selected === "redis" ? null : "redis")}
-            style={{ display: "flex", flexDirection: "column", gap: "4px", cursor: "pointer" }}
+          {/* Inverted index table */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={active ? { opacity: 1, scale: 1 } : {}}
+            transition={{ delay: 0.25 }}
+            onClick={() => setSelected(selected === "pubsub" ? null : "pubsub")}
+            style={{
+              display: "flex", flexDirection: "column",
+              border: `1px solid ${selected === "pubsub" ? "var(--primary)" : "var(--border)"}`,
+              background: selected === "pubsub" ? "var(--border)" : "var(--card)",
+              cursor: "pointer", overflow: "hidden",
+              width: "150px",
+            }}
           >
-            <motion.div
-              initial={{ opacity: 0, y: -5 }}
-              animate={active ? { opacity: 1, y: 0 } : {}}
-              transition={{ delay: 0.25 }}
-              style={{
-                fontSize: "10px", fontWeight: 700, color: "var(--no)",
-                letterSpacing: "0.06em", textAlign: "center",
-                paddingBottom: "2px",
-              }}
-            >
-              {fin ? "Redis Pub/Sub" : "News Router"}
-            </motion.div>
-            {["news:politics", "news:macro", "news:crypto"].map((ch, i) => (
+            <div style={{
+              padding: "5px 10px",
+              borderBottom: "1px solid var(--border)",
+              fontSize: "10px", fontWeight: 700, color: "var(--primary)",
+              letterSpacing: "0.06em", textAlign: "center",
+            }}>
+              {fin ? "In-Mem Pub/Sub" : "Topic Router"}
+            </div>
+            {[
+              { tag: "politics", subs: 3 },
+              { tag: "crypto", subs: 2 },
+              { tag: "financials", subs: 4 },
+            ].map((row, i) => (
               <motion.div
-                key={ch}
+                key={row.tag}
                 initial={{ opacity: 0, x: -10 }}
                 animate={active ? { opacity: 1, x: 0 } : {}}
                 transition={{ delay: 0.3 + i * 0.08 }}
                 style={{
-                  padding: "4px 10px",
-                  background: selected === "redis" ? "var(--border)" : "var(--card)",
-                  border: `1px solid ${selected === "redis" ? "var(--no)" : "var(--border)"}`,
-                  fontSize: "8px", color: "var(--no)", fontWeight: 600,
-                  letterSpacing: "0.06em",
-                  whiteSpace: "nowrap",
+                  borderBottom: i < 2 ? "1px solid var(--border)" : "none",
+                  padding: "3px 10px",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
                 }}
               >
-                {ch}
+                <span style={{ fontSize: "8px", color: "var(--primary)", fontWeight: 600, letterSpacing: "0.04em" }}>
+                  {row.tag}
+                </span>
+                <span style={{ fontSize: "7px", color: "var(--muted)" }}>
+                  {row.subs} subs
+                </span>
               </motion.div>
             ))}
-          </div>
+          </motion.div>
 
           <FlowArrow active={active} delay={0.5} />
 
