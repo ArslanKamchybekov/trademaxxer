@@ -803,7 +803,7 @@ function getFlowNodes(fin) {
     },
     {
       id: "modal", label: "Modal Fan-Out", sub: fin ? "Serverless containers" : "Cloud workers",
-      color: "#b388ff", tech: "20× concurrency · asyncio.gather()",
+      color: "#00ff41", tech: "20× concurrency · asyncio.gather()",
       detail: fin
         ? "MarketAgent on Modal. buffer_containers=1 stays warm. All matching markets evaluated in parallel via asyncio.gather()."
         : "Spins up cloud workers to check all relevant markets at the same time. 20 markets checked in parallel.",
@@ -824,14 +824,14 @@ function getFlowNodes(fin) {
     },
     {
       id: "jupiter", label: "Jupiter Ultra", sub: fin ? "Solana DEX routing" : "Trade executor",
-      color: "#b388ff", tech: "USDC → SOL · ~85ms quote",
+      color: "#9945ff", tech: "USDC → SOL · ~85ms quote",
       detail: fin
         ? "Routes through Raydium, Orca pools. Returns outAmount, priceImpact, routePlan for optimal execution path."
         : "Finds the cheapest way to swap dollars for tokens across multiple exchanges. Gets a price quote in ~85ms.",
     },
     {
       id: "solana", label: "Solana TX", sub: fin ? "On-chain confirm" : "Blockchain confirm",
-      color: "var(--yes)", tech: "~400ms slot · mainnet",
+      color: "#9945ff", tech: "~400ms slot · mainnet",
       detail: fin
         ? "Signed transaction submitted for swap. Confirms in one slot. Portfolio mark-to-market updates from agent theo."
         : "The trade is sent to the Solana blockchain and confirmed in ~400ms. Your portfolio updates immediately.",
@@ -906,7 +906,7 @@ function FlowArrow({ active, delay }) {
   )
 }
 
-function ArchitectureSlide() {
+function ArchitectureSlide({ onModalReveal, onSolanaReveal }) {
   const fin = useFin()
   const [selected, setSelected] = useState(null)
   const [active, setActive] = useState(false)
@@ -926,7 +926,7 @@ function ArchitectureSlide() {
   const selectedNode = allNodes.find(n => n.id === selected)
 
   return (
-    <section ref={ref}>
+    <section ref={ref} style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div className="term-bar">
         <span className="title">ARCHITECTURE</span>
         <span className="meta">CLICK ANY NODE</span>
@@ -934,19 +934,125 @@ function ArchitectureSlide() {
       <span className="section-label">System Design</span>
       <h2 style={{ fontSize: "1.2em" }}>{fin ? "NEWS → TAG → ROUTE → EVAL → DECIDE → TRADE" : "How it works under the hood"}</h2>
 
-      {/* Main horizontal flow */}
+      {/* Main flow with fan-out */}
       <div style={{
         display: "flex", alignItems: "center",
         marginTop: "32px", gap: "0",
       }}>
-        {flowNodes.map((node, i) => (
+        {/* Phase 1: DBNews → Tagger */}
+        {flowNodes.slice(0, 2).map((node, i) => (
           <div key={node.id} style={{ display: "flex", alignItems: "center" }}>
             <FlowNode
               node={node} selected={selected} onClick={setSelected}
               active={active} delay={0.1 * i} size="big"
             />
-            {i < flowNodes.length - 1 && (
-              <FlowArrow active={active} delay={0.1 * i + 0.05} />
+            <FlowArrow active={active} delay={0.1 * i + 0.05} />
+          </div>
+        ))}
+
+        {/* Phase 2: Redis label + 3 channels → Modal container box */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={active ? { opacity: 1 } : { opacity: 0 }}
+          transition={{ delay: 0.2 }}
+          style={{ display: "flex", alignItems: "center", flexShrink: 0 }}
+        >
+          {/* Redis label on top of 3 channel rows */}
+          <div
+            onClick={() => setSelected(selected === "redis" ? null : "redis")}
+            style={{ display: "flex", flexDirection: "column", gap: "4px", cursor: "pointer" }}
+          >
+            <motion.div
+              initial={{ opacity: 0, y: -5 }}
+              animate={active ? { opacity: 1, y: 0 } : {}}
+              transition={{ delay: 0.25 }}
+              style={{
+                fontSize: "10px", fontWeight: 700, color: "var(--no)",
+                letterSpacing: "0.06em", textAlign: "center",
+                paddingBottom: "2px",
+              }}
+            >
+              {fin ? "Redis Pub/Sub" : "News Router"}
+            </motion.div>
+            {["news:politics", "news:macro", "news:crypto"].map((ch, i) => (
+              <motion.div
+                key={ch}
+                initial={{ opacity: 0, x: -10 }}
+                animate={active ? { opacity: 1, x: 0 } : {}}
+                transition={{ delay: 0.3 + i * 0.08 }}
+                style={{
+                  padding: "4px 10px",
+                  background: selected === "redis" ? "var(--border)" : "var(--card)",
+                  border: `1px solid ${selected === "redis" ? "var(--no)" : "var(--border)"}`,
+                  fontSize: "8px", color: "var(--no)", fontWeight: 600,
+                  letterSpacing: "0.06em",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {ch}
+              </motion.div>
+            ))}
+          </div>
+
+          <FlowArrow active={active} delay={0.5} />
+
+          {/* Modal container box — 4 rows */}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={active ? { opacity: 1, scale: 1 } : {}}
+            transition={{ delay: 0.55 }}
+            onClick={() => setSelected(selected === "modal" ? null : "modal")}
+            style={{
+              display: "flex", flexDirection: "column",
+              border: `1px solid ${selected === "modal" ? "#00ff41" : "var(--border)"}`,
+              background: selected === "modal" ? "var(--border)" : "var(--card)",
+              cursor: "pointer", overflow: "hidden",
+              width: "130px",
+            }}
+          >
+            <div style={{
+              padding: "5px 10px",
+              borderBottom: "1px solid var(--border)",
+              fontSize: "10px", fontWeight: 700, color: "#00ff41",
+              letterSpacing: "0.06em", textAlign: "center",
+            }}>
+              Modal Fan-Out
+            </div>
+            {[1, 2, 3, 4].map(n => (
+              <motion.div
+                key={n}
+                initial={{ width: "0%" }}
+                animate={active ? { width: "100%" } : { width: "0%" }}
+                transition={{ delay: 0.6 + n * 0.08, duration: 0.4 }}
+                style={{
+                  borderBottom: n < 4 ? "1px solid var(--border)" : "none",
+                  padding: "3px 10px",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                }}
+              >
+                <span style={{ fontSize: "7px", color: "var(--muted)" }}>container-{n}</span>
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={active ? { width: "40px" } : { width: 0 }}
+                  transition={{ delay: 0.8 + n * 0.1, duration: 0.3 }}
+                  style={{ height: "3px", background: "#00ff41", opacity: 0.5 }}
+                />
+              </motion.div>
+            ))}
+          </motion.div>
+        </motion.div>
+
+        <FlowArrow active={active} delay={0.7} />
+
+        {/* Phase 3: Groq → Decision → Jupiter → Solana */}
+        {flowNodes.slice(4).map((node, i) => (
+          <div key={node.id} style={{ display: "flex", alignItems: "center" }}>
+            <FlowNode
+              node={node} selected={selected} onClick={setSelected}
+              active={active} delay={0.8 + 0.1 * i} size="big"
+            />
+            {i < flowNodes.slice(4).length - 1 && (
+              <FlowArrow active={active} delay={0.85 + 0.1 * i} />
             )}
           </div>
         ))}
@@ -991,7 +1097,7 @@ function ArchitectureSlide() {
                 <div style={{ fontSize: "10px", color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase" }}>
                   TECH
                 </div>
-                <div style={{ fontSize: "13px", color: "#b388ff", marginTop: "4px", lineHeight: 1.5 }}>
+                <div style={{ fontSize: "13px", color: selectedNode.color, marginTop: "4px", lineHeight: 1.5 }}>
                   {selectedNode.tech}
                 </div>
               </div>
@@ -1009,6 +1115,638 @@ function ArchitectureSlide() {
             </motion.div>
           )}
         </AnimatePresence>
+      </div>
+
+      {/* Secret slide CTAs */}
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "50px" }}>
+        {/* Solana CTA */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
+          transition={{ delay: 1.2, type: "spring", stiffness: 200 }}
+          whileHover={{ scale: 1.03, boxShadow: "0 0 24px rgba(153,69,255,0.25)" }}
+          whileTap={{ scale: 0.97 }}
+          onClick={onSolanaReveal}
+          style={{
+            display: "flex", alignItems: "center", gap: "14px",
+            padding: "14px 24px",
+            background: "rgba(153,69,255,0.06)",
+            border: "1px solid #9945ff",
+            cursor: "pointer",
+          }}
+        >
+          <svg width="28" height="28" viewBox="0 0 100 100" fill="none">
+            <defs>
+              <linearGradient id="solGrad1" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stopColor="#9945ff" />
+                <stop offset="100%" stopColor="#14f195" />
+              </linearGradient>
+            </defs>
+            <polygon points="10,72 80,72 90,82 20,82" fill="url(#solGrad1)" />
+            <polygon points="10,46 80,46 90,56 20,56" fill="url(#solGrad1)" />
+            <polygon points="20,20 90,20 80,30 10,30" fill="url(#solGrad1)" />
+          </svg>
+          <div>
+            <div style={{
+              fontSize: "16px", fontWeight: 700, color: "#9945ff",
+              letterSpacing: "0.04em",
+            }}>
+              Are you the Solana team?
+            </div>
+            <div style={{ fontSize: "10px", color: "#555", marginTop: "2px", letterSpacing: "0.08em" }}>
+              CLICK FOR JUPITER ULTRA + ON-CHAIN EXECUTION →
+            </div>
+          </div>
+        </motion.div>
+
+        {/* Modal CTA */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={active ? { opacity: 1, y: 0 } : { opacity: 0, y: 10 }}
+          transition={{ delay: 1.4, type: "spring", stiffness: 200 }}
+          whileHover={{ scale: 1.03, boxShadow: "0 0 24px rgba(0,255,65,0.25)" }}
+          whileTap={{ scale: 0.97 }}
+          onClick={onModalReveal}
+          style={{
+            display: "flex", alignItems: "center", gap: "14px",
+            padding: "14px 24px",
+            background: "rgba(0,255,65,0.06)",
+            border: "1px solid #00ff41",
+            cursor: "pointer",
+          }}
+        >
+          <span style={{
+            fontSize: "18px", fontWeight: 700, color: "#00ff41",
+            letterSpacing: "0.06em",
+          }}>
+            ◆◆
+          </span>
+          <div>
+            <div style={{
+              fontSize: "16px", fontWeight: 700, color: "#00ff41",
+              letterSpacing: "0.04em",
+            }}>
+              Are you the Modal team?
+            </div>
+            <div style={{ fontSize: "10px", color: "#555", marginTop: "2px", letterSpacing: "0.08em" }}>
+              CLICK FOR A DEEP DIVE INTO OUR MODAL ARCHITECTURE →
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </section>
+  )
+}
+
+// ── Secret Modal deep-dive slide ──
+
+const MODAL_GREEN = "#00ff41"
+const MODAL_BG = "#0b0b0b"
+
+const MODAL_FEATURES = [
+  {
+    title: "MarketAgent Deployment",
+    code: `app = modal.App("trademaxxer-agents")
+@app.cls(
+  concurrency_limit=20,
+  scaledown_window=300,
+  buffer_containers=1,
+)
+class MarketAgent:
+    @modal.enter()
+    def init(self):
+        self.groq = GroqClient()`,
+    detail: "One class, 20 concurrent evaluations per container. Buffer container stays warm. 300s scaledown window means zero cold starts during trading.",
+  },
+  {
+    title: "Parallel Fan-Out",
+    code: `# 20 markets, 1 wall-clock cycle
+results = await asyncio.gather(*[
+    agent.evaluate.remote.aio(
+        story.to_dict(),
+        market.to_dict()
+    )
+    for market in matching_markets
+])`,
+    detail: "Every headline triggers parallel evals across all matching markets. Modal auto-scales containers. 20 markets = same latency as 1.",
+  },
+  {
+    title: "Zero Cold Starts",
+    code: `buffer_containers = 1  # always warm
+scaledown_window = 300  # 5 min grace
+
+# Warmup on boot
+async def _warmup_modal():
+    agent = modal.Cls.from_name(
+        "trademaxxer-agents",
+        "MarketAgent"
+    )()
+    await agent.evaluate.remote.aio(...)`,
+    detail: "Pre-warmed container + startup warmup ping. First real headline hits a hot container. No 3-second cold start penalty.",
+  },
+]
+
+function ModalDeepDive() {
+  const [active, setActive] = useState(false)
+  const [selectedIdx, setSelectedIdx] = useState(0)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => setActive(e.isIntersecting),
+      { threshold: 0.3 },
+    )
+    if (ref.current) obs.observe(ref.current)
+    return () => obs.disconnect()
+  }, [])
+
+  const feat = MODAL_FEATURES[selectedIdx]
+
+  return (
+    <section
+      ref={ref}
+      style={{
+        background: MODAL_BG,
+        padding: "40px 60px",
+      }}
+    >
+      {/* Modal header */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        borderBottom: `1px solid ${MODAL_GREEN}22`,
+        paddingBottom: "10px", marginBottom: "28px",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div style={{
+            fontSize: "22px", fontWeight: 800, color: MODAL_GREEN,
+            letterSpacing: "0.02em",
+          }}>
+            ◆◆ Modal
+          </div>
+          <span style={{
+            fontSize: "10px", color: "#333", letterSpacing: "0.1em",
+            textTransform: "uppercase",
+          }}>
+            SECRET SLIDE
+          </span>
+        </div>
+        <span style={{
+          fontSize: "10px", padding: "3px 10px",
+          border: `1px solid ${MODAL_GREEN}`,
+          color: MODAL_GREEN, letterSpacing: "0.08em",
+        }}>
+          DEEP DIVE
+        </span>
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={active ? { opacity: 1, y: 0 } : {}}
+        transition={{ duration: 0.4 }}
+      >
+        <div style={{
+          fontSize: "11px", color: MODAL_GREEN, letterSpacing: "0.2em",
+          textTransform: "uppercase", marginBottom: "8px",
+        }}>
+          How TradeMaxxer Uses Modal
+        </div>
+        <h2 style={{
+          fontSize: "1.6em", color: "#fff", letterSpacing: "0.04em",
+        }}>
+          SERVERLESS <span style={{ color: MODAL_GREEN }}>AGENT INFRASTRUCTURE</span>
+        </h2>
+      </motion.div>
+
+      <div style={{ display: "flex", gap: "32px", marginTop: "28px" }}>
+        {/* Left: feature selector */}
+        <div style={{ width: "280px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "10px" }}>
+          {MODAL_FEATURES.map((f, i) => (
+            <motion.div
+              key={f.title}
+              initial={{ opacity: 0, x: -20 }}
+              animate={active ? { opacity: 1, x: 0 } : {}}
+              transition={{ delay: 0.2 + i * 0.1 }}
+              onClick={() => setSelectedIdx(i)}
+              style={{
+                padding: "14px 16px",
+                background: selectedIdx === i ? `${MODAL_GREEN}12` : "transparent",
+                border: `1px solid ${selectedIdx === i ? MODAL_GREEN : "#1a1a1a"}`,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              <div style={{
+                fontSize: "12px", fontWeight: 700,
+                color: selectedIdx === i ? MODAL_GREEN : "#888",
+                letterSpacing: "0.06em",
+              }}>
+                {String(i + 1).padStart(2, "0")}. {f.title}
+              </div>
+            </motion.div>
+          ))}
+
+          {/* Stats */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={active ? { opacity: 1 } : {}}
+            transition={{ delay: 0.8 }}
+            style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}
+          >
+            {[
+              { label: "Containers", val: "Auto-scaling" },
+              { label: "Concurrency", val: "20x per container" },
+              { label: "Cold Start", val: "Eliminated" },
+              { label: "Cost", val: "~$0.001/story" },
+            ].map(s => (
+              <div key={s.label} style={{
+                display: "flex", justifyContent: "space-between",
+                fontSize: "10px", padding: "4px 0",
+                borderBottom: "1px solid #1a1a1a",
+              }}>
+                <span style={{ color: "#555" }}>{s.label}</span>
+                <span style={{ color: MODAL_GREEN }}>{s.val}</span>
+              </div>
+            ))}
+          </motion.div>
+        </div>
+
+        {/* Right: code + detail */}
+        <div style={{ flex: 1 }}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={selectedIdx}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {/* Code block */}
+              <div style={{
+                background: "#0d0d0d",
+                border: `1px solid ${MODAL_GREEN}33`,
+                padding: "20px",
+                fontFamily: "var(--font)",
+                fontSize: "12px",
+                lineHeight: 1.7,
+                color: "#ccc",
+                whiteSpace: "pre",
+                overflow: "auto",
+              }}>
+                {feat.code.split("\n").map((line, i) => (
+                  <div key={i}>
+                    <span style={{ color: "#333", marginRight: "16px", userSelect: "none" }}>
+                      {String(i + 1).padStart(2, " ")}
+                    </span>
+                    {line.split(/(modal\.\w+|asyncio\.gather|buffer_containers|scaledown_window|concurrency_limit|\.remote\.aio|@app\.cls|@modal\.enter|MarketAgent|GroqClient)/).map((part, j) =>
+                      /^(modal\.\w+|asyncio\.gather|buffer_containers|scaledown_window|concurrency_limit|\.remote\.aio|@app\.cls|@modal\.enter|MarketAgent|GroqClient)$/.test(part)
+                        ? <span key={j} style={{ color: MODAL_GREEN }}>{part}</span>
+                        : <span key={j}>{part}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Description */}
+              <div style={{
+                marginTop: "16px",
+                padding: "14px 18px",
+                border: "1px solid #1a1a1a",
+                fontSize: "13px",
+                color: "#aaa",
+                lineHeight: 1.7,
+              }}>
+                {feat.detail}
+              </div>
+            </motion.div>
+          </AnimatePresence>
+
+          {/* Bottom bar */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={active ? { opacity: 1 } : {}}
+            transition={{ delay: 1.0 }}
+            style={{
+              marginTop: "16px",
+              display: "flex", gap: "24px", justifyContent: "center",
+            }}
+          >
+            {[
+              { val: "20×", label: "CONCURRENT EVALS" },
+              { val: "0ms", label: "COLD START" },
+              { val: "<$0.01", label: "PER 100 STORIES" },
+              { val: "300s", label: "WARM WINDOW" },
+            ].map((s, i) => (
+              <motion.div
+                key={s.label}
+                initial={{ opacity: 0, y: 10 }}
+                animate={active ? { opacity: 1, y: 0 } : {}}
+                transition={{ delay: 1.2 + i * 0.1 }}
+                style={{ textAlign: "center" }}
+              >
+                <div style={{
+                  fontSize: "22px", fontWeight: 700, color: MODAL_GREEN,
+                  fontFamily: "var(--font)",
+                }}>
+                  {s.val}
+                </div>
+                <div style={{
+                  fontSize: "8px", color: "#555", letterSpacing: "0.12em",
+                  marginTop: "3px",
+                }}>
+                  {s.label}
+                </div>
+              </motion.div>
+            ))}
+          </motion.div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// ── Secret Solana deep-dive slide ──
+
+const SOL_PURPLE = "#9945ff"
+const SOL_GREEN = "#14f195"
+const SOL_BG = "#0b0b0b"
+
+const SOLANA_FEATURES = [
+  {
+    title: "Jupiter Ultra Routing",
+    code: `// Quote: find optimal swap path
+const quote = await fetch(
+  "https://lite-api.jup.ag/ultra/v1/order", {
+    method: "POST",
+    body: JSON.stringify({
+      inputMint: USDC_MINT,
+      outputMint: SOL_MINT,
+      amount: usdcAmount * 1e6,
+    })
+  }
+)
+// Routes: Raydium, Orca, Meteora
+// Returns: outAmount, priceImpact`,
+    detail: "Jupiter Ultra aggregates liquidity across all Solana DEXs. One API call finds the best swap path. We route USDC to SOL for every trade decision the agent makes.",
+  },
+  {
+    title: "Real-Time Mark-to-Market",
+    code: `// On every agent decision:
+const theo = decision.theo  // 0.91
+const current = market.probability  // 0.82
+const delta = Math.abs(theo - current)
+
+if (delta > SKIP_THRESHOLD) {
+  // Execute trade via Jupiter
+  await executeSwap(direction, amount)
+}
+
+// Mark ALL positions to theo price
+positions.forEach(p => {
+  p.currentValue = p.contracts * theo
+})`,
+    detail: "Every agent decision updates portfolio mark-to-market using the theoretical fair price. Positions are valued in real-time, not at stale market prices. P&L reflects the agent's edge.",
+  },
+  {
+    title: "On-Chain Confirmation",
+    code: `// Solana TX lifecycle
+t=0ms    Decision: YES @ 91% (current 82%)
+t=85ms   Jupiter quote received
+t=90ms   Transaction constructed + signed
+t=400ms  Slot confirmed on mainnet
+t=401ms  Portfolio updated
+
+// ~400ms slot time on Solana mainnet
+// Sub-second from decision to confirm`,
+    detail: "Solana's ~400ms slot time means trades confirm almost instantly. Combined with Jupiter Ultra's ~85ms quote time, we go from agent decision to on-chain confirmation in under 500ms.",
+  },
+]
+
+function SolanaDeepDive() {
+  const [active, setActive] = useState(false)
+  const [selectedIdx, setSelectedIdx] = useState(0)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => setActive(e.isIntersecting),
+      { threshold: 0.3 },
+    )
+    if (ref.current) obs.observe(ref.current)
+    return () => obs.disconnect()
+  }, [])
+
+  const feat = SOLANA_FEATURES[selectedIdx]
+
+  return (
+    <section
+      ref={ref}
+      style={{
+        background: SOL_BG,
+        padding: "40px 60px",
+      }}
+    >
+      {/* Solana header */}
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        borderBottom: `1px solid ${SOL_PURPLE}22`,
+        paddingBottom: "10px", marginBottom: "28px",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: "10px",
+          }}>
+            <svg width="26" height="26" viewBox="0 0 100 100" fill="none">
+              <defs>
+                <linearGradient id="solGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#9945ff" />
+                  <stop offset="100%" stopColor="#14f195" />
+                </linearGradient>
+              </defs>
+              <polygon points="10,72 80,72 90,82 20,82" fill="url(#solGrad2)" />
+              <polygon points="10,46 80,46 90,56 20,56" fill="url(#solGrad2)" />
+              <polygon points="20,20 90,20 80,30 10,30" fill="url(#solGrad2)" />
+            </svg>
+            <span style={{ fontSize: "22px", fontWeight: 800, color: SOL_PURPLE, letterSpacing: "0.02em" }}>Solana</span>
+          </div>
+          <span style={{
+            fontSize: "10px", color: "#333", letterSpacing: "0.1em",
+            textTransform: "uppercase",
+          }}>
+            SECRET SLIDE
+          </span>
+        </div>
+        <span style={{
+          fontSize: "10px", padding: "3px 10px",
+          border: `1px solid ${SOL_PURPLE}`,
+          color: SOL_PURPLE, letterSpacing: "0.08em",
+        }}>
+          DEEP DIVE
+        </span>
+      </div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={active ? { opacity: 1, y: 0 } : {}}
+        transition={{ duration: 0.4 }}
+      >
+        <div style={{
+          fontSize: "11px", color: SOL_PURPLE, letterSpacing: "0.2em",
+          textTransform: "uppercase", marginBottom: "8px",
+        }}>
+          How TradeMaxxer Uses Solana
+        </div>
+        <h2 style={{
+          fontSize: "1.6em", color: "#fff", letterSpacing: "0.04em",
+        }}>
+          JUPITER ULTRA + <span style={{ color: SOL_GREEN }}>ON-CHAIN EXECUTION</span>
+        </h2>
+      </motion.div>
+
+      <div style={{ display: "flex", gap: "32px", marginTop: "28px" }}>
+        {/* Left: feature selector */}
+        <div style={{ width: "280px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "10px" }}>
+          {SOLANA_FEATURES.map((f, i) => (
+            <motion.div
+              key={f.title}
+              initial={{ opacity: 0, x: -20 }}
+              animate={active ? { opacity: 1, x: 0 } : {}}
+              transition={{ delay: 0.2 + i * 0.1 }}
+              onClick={() => setSelectedIdx(i)}
+              style={{
+                padding: "14px 16px",
+                background: selectedIdx === i ? `${SOL_PURPLE}12` : "transparent",
+                border: `1px solid ${selectedIdx === i ? SOL_PURPLE : "#1a1a1a"}`,
+                cursor: "pointer",
+                transition: "all 0.2s",
+              }}
+            >
+              <div style={{
+                fontSize: "12px", fontWeight: 700,
+                color: selectedIdx === i ? SOL_PURPLE : "#888",
+                letterSpacing: "0.06em",
+              }}>
+                {String(i + 1).padStart(2, "0")}. {f.title}
+              </div>
+            </motion.div>
+          ))}
+
+          {/* Stats */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={active ? { opacity: 1 } : {}}
+            transition={{ delay: 0.8 }}
+            style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "8px" }}
+          >
+            {[
+              { label: "Chain", val: "Solana Mainnet" },
+              { label: "DEX Aggregator", val: "Jupiter Ultra" },
+              { label: "Swap Pair", val: "USDC ↔ SOL" },
+              { label: "Quote Latency", val: "~85ms" },
+              { label: "Slot Confirm", val: "~400ms" },
+            ].map(s => (
+              <div key={s.label} style={{
+                display: "flex", justifyContent: "space-between",
+                fontSize: "10px", padding: "4px 0",
+                borderBottom: "1px solid #1a1a1a",
+              }}>
+                <span style={{ color: "#555" }}>{s.label}</span>
+                <span style={{ color: SOL_GREEN }}>{s.val}</span>
+              </div>
+            ))}
+          </motion.div>
+        </div>
+
+        {/* Right: code + detail */}
+        <div style={{ flex: 1 }}>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={selectedIdx}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {/* Code block */}
+              <div style={{
+                background: "#0d0d0d",
+                border: `1px solid ${SOL_PURPLE}33`,
+                padding: "20px",
+                fontFamily: "var(--font)",
+                fontSize: "12px",
+                lineHeight: 1.7,
+                color: "#ccc",
+                whiteSpace: "pre",
+                overflow: "auto",
+              }}>
+                {feat.code.split("\n").map((line, i) => (
+                  <div key={i}>
+                    <span style={{ color: "#333", marginRight: "16px", userSelect: "none" }}>
+                      {String(i + 1).padStart(2, " ")}
+                    </span>
+                    {line.split(/(Jupiter|USDC|SOL|Solana|Raydium|Orca|Meteora|mainnet|theo|decision\.theo|SKIP_THRESHOLD|executeSwap|priceImpact|outAmount|jup\.ag)/).map((part, j) =>
+                      /^(Jupiter|USDC|SOL|Solana|Raydium|Orca|Meteora|mainnet|theo|decision\.theo|SKIP_THRESHOLD|executeSwap|priceImpact|outAmount|jup\.ag)$/.test(part)
+                        ? <span key={j} style={{ color: SOL_PURPLE }}>{part}</span>
+                        : /^(\/\/.*)$/.test(part)
+                          ? <span key={j} style={{ color: "#555" }}>{part}</span>
+                          : <span key={j}>{part}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* Description */}
+              <div style={{
+                marginTop: "16px",
+                padding: "14px 18px",
+                border: "1px solid #1a1a1a",
+                fontSize: "13px",
+                color: "#aaa",
+                lineHeight: 1.7,
+              }}>
+                {feat.detail}
+              </div>
+            </motion.div>
+          </AnimatePresence>
+
+          {/* Bottom bar */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={active ? { opacity: 1 } : {}}
+            transition={{ delay: 1.0 }}
+            style={{
+              marginTop: "16px",
+              display: "flex", gap: "24px", justifyContent: "center",
+            }}
+          >
+            {[
+              { val: "~85ms", label: "JUPITER QUOTE" },
+              { val: "~400ms", label: "SLOT CONFIRM" },
+              { val: "<500ms", label: "DECISION → CHAIN" },
+              { val: "USDC↔SOL", label: "SWAP PAIR" },
+            ].map((s, i) => (
+              <motion.div
+                key={s.label}
+                initial={{ opacity: 0, y: 10 }}
+                animate={active ? { opacity: 1, y: 0 } : {}}
+                transition={{ delay: 1.2 + i * 0.1 }}
+                style={{ textAlign: "center" }}
+              >
+                <div style={{
+                  fontSize: "22px", fontWeight: 700, color: SOL_GREEN,
+                  fontFamily: "var(--font)",
+                }}>
+                  {s.val}
+                </div>
+                <div style={{
+                  fontSize: "8px", color: "#555", letterSpacing: "0.12em",
+                  marginTop: "3px",
+                }}>
+                  {s.label}
+                </div>
+              </motion.div>
+            ))}
+          </motion.div>
+        </div>
       </div>
     </section>
   )
@@ -1129,18 +1867,6 @@ function ClosingSlide() {
             Anirudh &middot; Arslan &middot; Mathew
           </div>
         </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={active ? { opacity: 0.3 } : {}}
-          transition={{ delay: 1.4, duration: 0.5 }}
-          style={{
-            fontSize: "10px", color: "var(--muted)", letterSpacing: "0.15em",
-            marginTop: "16px", fontFamily: "var(--font-mono)",
-          }}
-        >
-          MODAL &middot; GROQ &middot; SOLANA &middot; JUPITER &middot; REDIS
-        </motion.div>
       </div>
     </section>
   )
@@ -1152,6 +1878,8 @@ export default function App() {
   const deckRef = useRef(null)
   const deckInstance = useRef(null)
   const [fintech, setFintech] = useState(true)
+  const [modalRevealed, setModalRevealed] = useState(false)
+  const [solanaRevealed, setSolanaRevealed] = useState(false)
 
   useEffect(() => {
     if (deckInstance.current) return
@@ -1228,9 +1956,9 @@ export default function App() {
               width: "480px", flexShrink: 0,
             }}>
               {[
-                { img: "/assets/team/arslan.JPG", name: "Arslan Kamchybekov", role: <>Founding Eng. @ <span className="primary">Kairos</span><br />Backed by <span className="primary">Jump Trading</span> &amp; <span className="primary">a16z</span></> },
+                { img: "/assets/team/arslan.JPG", name: "Arslan Kamchybekov", role: <>Founding Eng. @ <span className="primary">Kairos</span><br />Backed by <span className="primary">Geneva Trading</span> &amp; <span className="primary">a16z</span></> },
                 { img: "/assets/team/ani.JPG", name: "Anirudh Kuppili", role: <>Eng. @ <span className="primary">Aparavi</span><br /><span className="primary">Series A</span> startup</> },
-                { img: "/assets/team/matt.JPG", name: "Mathew Randall", role: <>Prev. @ <span className="primary">Optiver</span><br />Incoming @ <span className="primary">Etched.ai</span></> },
+                { img: "/assets/team/matt.JPG", name: "Mathew Randal", role: <>Eng. @ <span className="primary">Optiver</span><br />Quant @ Illinois</> },
               ].map((m) => (
                 <div key={m.name} style={{
                   display: "flex", alignItems: "center", gap: "16px",
@@ -1295,8 +2023,41 @@ export default function App() {
           </div>
         </section>
 
-        {/* ━━ SLIDE 5: ARCHITECTURE ━━ */}
-        <ArchitectureSlide />
+        {/* ━━ SLIDE 6: ARCHITECTURE ━━ */}
+        <ArchitectureSlide
+          onModalReveal={() => {
+            if (!modalRevealed) {
+              setModalRevealed(true)
+              setTimeout(() => {
+                if (deckInstance.current) {
+                  deckInstance.current.sync()
+                  deckInstance.current.next()
+                }
+              }, 100)
+            } else if (deckInstance.current) {
+              deckInstance.current.next()
+            }
+          }}
+          onSolanaReveal={() => {
+            if (!solanaRevealed) {
+              setSolanaRevealed(true)
+              setTimeout(() => {
+                if (deckInstance.current) {
+                  deckInstance.current.sync()
+                  deckInstance.current.next()
+                }
+              }, 100)
+            } else if (deckInstance.current) {
+              deckInstance.current.next()
+            }
+          }}
+        />
+
+        {/* ━━ SECRET: SOLANA DEEP DIVE ━━ */}
+        {solanaRevealed && <SolanaDeepDive />}
+
+        {/* ━━ SECRET: MODAL DEEP DIVE ━━ */}
+        {modalRevealed && <ModalDeepDive />}
 
         {/* ━━ SLIDE 7: QUESTIONS / END ━━ */}
         <ClosingSlide />

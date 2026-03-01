@@ -254,8 +254,8 @@ trademaxxer/
 ## Team
 
 - **Anirudh Kuppili** · Eng. @ Aparavi (Series A)
-- **Arslan Kamchybekov** · Founding Eng. @ Kairos (backed by Jump Trading & a16z)
-- **Mathew Randall** · Prev @ Optiver, Incoming @ Etched.ai
+- **Arslan Kamchybekov** · Founding Eng. @ Kairos (backed by Geneva Trading & a16z)
+- **Mathew Randal** · Eng. @ Optiver, Quant @ Illinois
 
 ## License
 
