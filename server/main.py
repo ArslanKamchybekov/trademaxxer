@@ -418,6 +418,8 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
         logger.info(f"DFlow executor initialized with {len(mappings)} market mappings")
     except Exception as e:
         logger.warning(f"Failed to initialize DFlow executor: {e}")
+        if "SOLANA_WALLET_ADDRESS" in str(e) or "Turnkey" in str(e):
+            logger.warning("Tip: When using Turnkey, set SOLANA_WALLET_ADDRESS in .env to your Solana wallet public key.")
 
     async def handle_cors(request):
         """Handle CORS preflight requests"""
@@ -519,12 +521,15 @@ async def run(*, use_mock: bool = False, use_local: bool = False) -> None:
 
         try:
             balance_info = await dflow_executor.get_wallet_balance()
+            # Always 200 so client gets valid JSON; optional 'error' key if RPC failed
             return web.json_response(balance_info, headers=headers)
         except Exception as e:
             logger.error(f"Wallet balance error: {e}")
             return web.json_response({
-                'error': str(e)
-            }, headers=headers, status=500)
+                'sol_balance': 0.0,
+                'wallet': getattr(dflow_executor, 'wallet_pubkey_str', None) or str(getattr(dflow_executor, 'wallet_pubkey', '')),
+                'error': str(e),
+            }, headers=headers)
 
     async def get_dflow_markets_handler(request):
         """Get available DFlow markets"""

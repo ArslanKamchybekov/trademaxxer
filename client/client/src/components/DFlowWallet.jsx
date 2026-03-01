@@ -11,8 +11,10 @@ export default function DFlowWallet() {
       try {
         setLoading(true)
         const response = await fetch('http://localhost:8767/api/wallet')
-        if (!response.ok) throw new Error('Failed to fetch wallet data')
-        const data = await response.json()
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(data.error || `Wallet API ${response.status}`)
+        }
         setWalletData(data)
         setError(null)
       } catch (err) {
@@ -112,7 +114,10 @@ export default function DFlowWallet() {
           {walletData?.sol_balance?.toFixed(4) || '0.0000'} SOL
         </div>
         <div className="text-[8px] text-muted-foreground">
-          {walletData?.sol_balance === 0 && "⚠️ No funds available for trading"}
+          {walletData?.sol_balance === 0 && !walletData?.error && "⚠️ No funds available for trading"}
+          {walletData?.error && (
+            <span className="text-no" title={walletData.error}>{walletData.error.slice(0, 40)}…</span>
+          )}
         </div>
       </div>
 
